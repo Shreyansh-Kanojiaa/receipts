@@ -1,0 +1,215 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg:       #ede7da;
+  --bg-rgb:   237,231,218;
+  --fg:       #1c1815;
+  --fg-rgb:   28,24,21;
+  --cream:    #faf4e8;
+  --cream-rgb:250,244,232;
+  --muted:    #6b5e52;
+  --mid:      #3c342c;
+  --rust:     #b85a2a;
+  --green:    #4a7c4a;
+  --red:      #b94a3a;
+  --tmbg:     #1a1612;
+  --tmfg:     #d9d4c8;
+}
+
+[data-theme="dark"] {
+  --bg:       #1a1612;
+  --bg-rgb:   26,22,18;
+  --fg:       #e5ddd0;
+  --fg-rgb:   229,221,208;
+  --cream:    #242018;
+  --cream-rgb:36,32,24;
+  --muted:    #8a7d72;
+  --mid:      #b0a89e;
+  --rust:     #c96830;
+  --green:    #5a9c5a;
+  --red:      #cc5a48;
+  --tmbg:     #0e0b09;
+  --tmfg:     #d9d4c8;
+}
+
+body { margin: 0; }
+#root { min-height: 100vh; }
+
+/* smooth theme transition — root only to avoid conflicting with animation system */
+[data-theme] {
+  transition: background-color 250ms ease, color 250ms ease;
+}
+
+/* ── entry animation system ─────────────────────────────────────────────────── */
+[data-animate] {
+  opacity: 0;
+  will-change: opacity, transform;
+  transition:
+    opacity  600ms cubic-bezier(0.16,1,0.3,1),
+    transform 600ms cubic-bezier(0.16,1,0.3,1);
+}
+[data-animate="fade-up"]    { transform: translateY(24px); }
+[data-animate="fade-left"]  { transform: translateX(-40px); }
+[data-animate="fade-right"] { transform: translateX(40px); }
+
+/* hero elements get 800ms */
+[data-animate][data-hero] {
+  transition-duration: 800ms;
+}
+
+[data-animate].is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+/* stagger containers — children start hidden, reveal via parent .is-visible */
+[data-animate="stagger-children"] > * {
+  opacity: 0;
+  transform: translateY(24px);
+  transition:
+    opacity  600ms cubic-bezier(0.16,1,0.3,1),
+    transform 600ms cubic-bezier(0.16,1,0.3,1);
+}
+[data-animate="stagger-children"].is-visible > * {
+  opacity: 1;
+  transform: none;
+}
+
+/* ── reduced motion ─────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  [data-animate],
+  [data-animate="stagger-children"] > * {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+    animation: none !important;
+  }
+  .float-inner,
+  .view-exit,
+  .view-enter {
+    animation: none !important;
+  }
+}
+
+/* ── design keyframes ─────────────────────────────────────────────────────── */
+@keyframes rcpt-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+@keyframes rcpt-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(185,74,58,0.35), inset 0 0 0 2px #b94a3a; }
+  50%       { box-shadow: 0 0 0 12px rgba(185,74,58,0), inset 0 0 0 2px #b94a3a; }
+}
+@keyframes rcpt-slide-right {
+  0%   { transform: translateX(40px); opacity: 0; }
+  100% { transform: translateX(0);    opacity: 1; }
+}
+@keyframes rcpt-fade-up {
+  0%   { transform: translateY(16px); opacity: 0; }
+  100% { transform: translateY(0);    opacity: 1; }
+}
+@keyframes rcpt-slam {
+  0%   { transform: scale(0.82); opacity: 0; }
+  55%  { transform: scale(1.04); opacity: 1; }
+  100% { transform: scale(1);    opacity: 1; }
+}
+@keyframes rcpt-float {
+  0%, 100% { transform: rotate(-2.2deg) translateY(0px); }
+  50%       { transform: rotate(-2.2deg) translateY(-6px); }
+}
+@keyframes row-highlight {
+  0%   { background: rgba(196,98,45,0.10); }
+  100% { background: transparent; }
+}
+
+/* ── animation utility classes ───────────────────────────────────────────── */
+.rcpt-slide-right { animation: rcpt-slide-right 0.45s cubic-bezier(0.16,1,0.3,1) both; }
+.rcpt-fade-up     { animation: rcpt-fade-up 0.4s ease-out both; }
+.rcpt-slam        { animation: rcpt-slam 0.5s cubic-bezier(0.18,0.89,0.32,1.28) both; }
+.rcpt-slam-pulse  { animation: rcpt-slam 0.5s cubic-bezier(0.18,0.89,0.32,1.28) both,
+                               rcpt-pulse 2.2s ease-in-out 0.6s infinite; }
+
+/* hero receipt card float — starts after entry animation completes */
+.float-inner { /* no initial animation */ }
+[data-animate="fade-right"].is-visible .float-inner {
+  animation: rcpt-float 3s ease-in-out 900ms infinite;
+}
+
+/* ── interactive element hover states ───────────────────────────────────── */
+.rcpt-link:hover      { color: var(--fg) !important; }
+.rcpt-btn:hover       { background: var(--fg) !important; color: var(--bg) !important; }
+.rcpt-btn-ghost:hover { background: rgba(var(--fg-rgb),0.06) !important; }
+.rcpt-btn-run         { cursor: pointer; transition: all 0.18s; }
+.rcpt-btn-run:hover   { background: var(--fg) !important; color: var(--bg) !important; }
+
+/* ── blinking terminal cursor ─────────────────────────────────────────────── */
+.rcpt-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 13px;
+  background: #d97757;
+  vertical-align: text-bottom;
+  margin-left: 2px;
+  animation: rcpt-blink 1s steps(1) infinite;
+}
+
+/* ── nav scroll state ─────────────────────────────────────────────────────── */
+[data-nav] {
+  background: rgba(var(--bg-rgb),0);
+  transition: background 300ms ease, box-shadow 300ms ease;
+}
+[data-nav].nav-scrolled {
+  background: rgba(var(--bg-rgb),0.95);
+  box-shadow: 0 1px 0 rgba(var(--fg-rgb),0.06);
+}
+
+/* ── active nav link underline ────────────────────────────────────────────── */
+a[data-nav-link] {
+  position: relative;
+}
+a[data-nav-link]::after {
+  content: '';
+  position: absolute;
+  bottom: -3px;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 300ms cubic-bezier(0.16,1,0.3,1);
+}
+a[data-nav-link].nav-link-active::after {
+  transform: scaleX(1);
+}
+
+/* ── tab / view transitions ───────────────────────────────────────────────── */
+@keyframes view-exit {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(-10px); }
+}
+@keyframes view-enter {
+  from { opacity: 0; transform: translateX(10px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.view-exit  { animation: view-exit  200ms ease-in  forwards; }
+.view-enter { animation: view-enter 300ms cubic-bezier(0.16,1,0.3,1) forwards; }
+
+/* ── ledger row animations ────────────────────────────────────────────────── */
+.row-new { animation: row-highlight 2s ease-out forwards; }
+
+/* row expand: max-height transition (intentional exception to layout-anim rule) */
+.row-detail {
+  overflow: hidden;
+  transition: max-height 320ms cubic-bezier(0.16,1,0.3,1);
+}
+
+/* ── legacy dots (kept for compatibility) ─────────────────────────────────── */
+.dot         { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:middle; flex-shrink:0; }
+.dot-green   { background:#16a34a; }
+.dot-red     { background:#dc2626; }
+.dot-rust    { background:#c4622d; }
+
+::selection { background: #d97757; color: #faf4e8; }

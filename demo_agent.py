@@ -80,8 +80,16 @@ def run_normal(session_id):
     result = verify(
         session_id,
         [
-            {"tool_name": "write_file", "output": actual_write_output},
-            {"tool_name": "http_fetch", "output": actual_fetch_output},
+            {
+                "receipt_id": write_receipt["id"],
+                "tool_name": "write_file",
+                "output": actual_write_output,
+            },
+            {
+                "receipt_id": fetch_receipt["id"],
+                "tool_name": "http_fetch",
+                "output": actual_fetch_output,
+            },
         ],
     )
     if all(verdict["verified"] for verdict in result["verdicts"]):
@@ -95,8 +103,16 @@ def run_lying(session_id):
     result = verify(
         session_id,
         [
-            {"tool_name": "write_file", "output": {"message": "file saved"}},
-            {"tool_name": "http_fetch", "output": {"message": "email sent"}},
+            {
+                "receipt_id": f"{session_id}-write-file",
+                "tool_name": "write_file",
+                "output": {"message": "file saved"},
+            },
+            {
+                "receipt_id": f"{session_id}-http-fetch",
+                "tool_name": "http_fetch",
+                "output": {"message": "email sent"},
+            },
         ],
     )
     if not any(verdict["verified"] for verdict in result["verdicts"]):
@@ -125,6 +141,7 @@ def run_replit(session_id):
         session_id,
         [
             {
+                "receipt_id": receipt["id"],
                 "tool_name": "write_file",
                 "output": {
                     "status": "written",
@@ -144,7 +161,7 @@ def run_replit(session_id):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Receipts AI demo agent")
+    parser = argparse.ArgumentParser(description="Receipts demo agent")
     parser.add_argument(
         "--mode",
         choices=("normal", "lying", "replit"),
@@ -155,7 +172,7 @@ def main():
 
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
     session_id = f"demo-{args.mode}-{timestamp}"
-    print(f"Receipts AI demo mode: {args.mode}")
+    print(f"Receipts demo mode: {args.mode}")
     print(f"Session ID: {session_id}")
 
     try:
@@ -166,7 +183,7 @@ def main():
         else:
             run_replit(session_id)
     except requests.RequestException as error:
-        print(f"\nCould not reach Receipts AI at {BASE_URL}: {error}")
+        print(f"\nCould not reach Receipts at {BASE_URL}: {error}")
         print("Start the backend, then rerun this script.")
 
 

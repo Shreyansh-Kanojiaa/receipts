@@ -25,6 +25,14 @@ def sign_receipt(fields: dict) -> str:
     return hmac.new(SECRET, message, hashlib.sha256).hexdigest()
 
 
+def verify_receipt_signature(receipt: dict) -> bool:
+    """Return whether a stored receipt still matches its HMAC signature."""
+    return hmac.compare_digest(
+        sign_receipt(receipt),
+        receipt["hmac_signature"],
+    )
+
+
 def build_receipt(
     session_id: str,
     tool_name: str,

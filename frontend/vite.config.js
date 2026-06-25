@@ -11,6 +11,7 @@ export default defineConfig({
       '/receipts': 'http://localhost:8000',
       '/verify':   'http://localhost:8000',
       '/stats':    'http://localhost:8000',
+      '/sessions': 'http://localhost:8000',
     },
   },
 })

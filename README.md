@@ -1,11 +1,11 @@
-# Receipts AI
+# Receipts
 
-A FastAPI proxy that intercepts AI agent tool calls, executes them, and produces HMAC-SHA256 signed receipts. A reconciliation engine checks whether the agent's claimed outputs match what actually ran. A React + Vite frontend visualizes every receipt and verdict in real time.
+A FastAPI proxy that intercepts AI agent tool calls, executes them, and produces HMAC-SHA256 signed receipts. A reconciliation engine verifies whether stored receipts are authentic and untampered. A React + Vite frontend shows every receipt and verdict in real time, with session-based reconciliation built in.
 
 ## Stack
 
 - **Backend:** Python 3 + FastAPI + SQLite (`backend/`)
-- **Frontend:** React 18 + Vite 5 + Tailwind 3 (`frontend/`)
+- **Frontend:** React 19 + Vite 8 + Tailwind 3 (`frontend/`)
 - **Signing:** HMAC-SHA256 over 7 canonical receipt fields
 
 ## Quick start
@@ -29,12 +29,20 @@ npm run dev
 
 `RECEIPT_SECRET` seeds the HMAC signing key. Omitting it falls back to a dev default — never use the default outside local development.
 
+## Tests
+
+```bash
+python -m pytest
+```
+
+The backend test suite (12 tests) uses isolated temporary SQLite databases and covers exact receipt matching, signature tampering, invalid claims, all demo verdicts, auto-verify signature-only logic, session timeout detection, and explicit session close with background verification.
+
 ## Demo agent (CLI)
 
 ```bash
-python3 demo_agent.py --mode normal   # claims match receipts → VERIFIED
-python3 demo_agent.py --mode lying    # no tools called → UNVERIFIED
-python3 demo_agent.py --mode replit   # wrong tool claimed → CONTRADICTED
+python3 demo_agent.py --mode normal   # honest agent — claims match receipts → VERIFIED
+python3 demo_agent.py --mode lying    # agent makes claims with no tool calls → UNVERIFIED
+python3 demo_agent.py --mode replit   # agent ran db_query but claimed write_file → CONTRADICTED
 ```
 
 Or click the live buttons in the frontend at `http://localhost:5173`.
@@ -46,8 +54,12 @@ Or click the live buttons in the frontend at `http://localhost:5173`.
 | `POST` | `/tools/call` | Execute a tool, get back a signed receipt |
 | `GET`  | `/receipts/{session_id}` | All receipts for a session |
 | `GET`  | `/receipts/all` | Most recent 50 receipts across all sessions |
-| `GET`  | `/stats` | Aggregate counts (receipts, sessions, unique tools) |
-| `POST` | `/verify` | Compare agent claims against stored receipt hashes |
+| `GET`  | `/stats` | Aggregate counts — receipts, verified claims, successful calls, tamper alerts, sessions |
+| `POST` | `/verify` | Verify exact receipt IDs, output hashes, and HMAC signatures |
+| `GET`  | `/sessions` | All sessions (most recent 50) |
+| `GET`  | `/sessions/{session_id}` | Single session detail |
+| `POST` | `/sessions/{session_id}/close` | Explicitly close a session; schedules auto-verify |
+| `POST` | `/sessions/{session_id}/verify-claim` | Full-claim reconciliation; persists `scope='full_claim'` |
 | `POST` | `/demo/run?mode=X` | Orchestrate a full demo scenario end-to-end |
 
 ### Example — call a tool
@@ -64,22 +76,51 @@ Available tools: `write_file`, `http_fetch`, `db_query`.
 ### Example — verify an agent's claim
 
 ```bash
-curl -s -X POST http://localhost:8000/verify \
+curl -s -X POST http://localhost:8000/sessions/sess-1/verify-claim \
   -H "Content-Type: application/json" \
   -d '{
     "session_id": "sess-1",
     "claimed_outputs": [
-      {"tool_name":"write_file","output":{"status":"written","path":"/tmp/out.txt","bytes_written":5}}
+      {"receipt_id":"<receipt-id>","tool_name":"write_file","output":{"status":"written","path":"/tmp/out.txt","bytes_written":5}}
     ]
   }' | python3 -m json.tool
 ```
 
-`verified: true` — hash matches the stored receipt. `verified: false` — the agent lied.
+Each claimed output must include the exact `receipt_id` returned by `/tools/call`.
+`verified: true` means the claim's output hash matches that receipt and the HMAC signature
+is still valid. Verdicts are written back to each receipt row in the DB. The session row
+is updated with `verification_scope='full_claim'` so auto-verify cannot overwrite a
+richer verdict later.
+
+### Verification scope
+
+The system distinguishes two kinds of verification:
+
+- **`signature_only`** — done automatically (on session close or 30s inactivity). Checks HMAC integrity only. Writes `verdict='TAMPERED'` to individual receipt rows for any that fail, so tamper alerts appear in the ledger and stats immediately. Cannot detect `CONTRADICTED`.
+- **`full_claim`** — done via `/sessions/{id}/verify-claim` or `demo_run`. Checks what the agent claimed it did against what actually ran. Can detect all four verdicts.
+
+The Live Ledger and Sessions tab show a `sig. only` label under verdict pills when the scope is `signature_only`, signalling that a manual reconciliation would be more informative.
+
+The **Reconciliation** tab automates full-claim verification — pick a session, click "Run Reconciliation", and the UI fetches stored receipts, builds the verification payload, and shows a per-receipt breakdown. From the Live Ledger, expand any row and click **"Reconcile this session →"** to jump directly to the Reconciliation view.
+
+## Stats keys
+
+`GET /stats` returns:
+
+| Key | What it counts |
+|-----|----------------|
+| `total_receipts` | All receipt rows |
+| `verified` | Receipts with `verdict='VERIFIED'` — agent's claim matched the stored receipt |
+| `successful_calls` | Receipts with `status='success'` — tool executed without error |
+| `tamper_alerts` | Receipts with `verdict='TAMPERED'` — HMAC signature invalid |
+| `sessions` / `total_sessions` | All sessions |
+| `open_sessions` | Sessions still accepting tool calls |
+| `verified_sessions` | Sessions that have completed verification |
+
+`verified` and `successful_calls` are intentionally distinct: a tool can run successfully but the agent can still lie about what it returned.
 
 ## Known limitations
 
-- `/verify` matches only the *most recent* receipt per `(session_id, tool_name)` — multiple calls to the same tool in a session are not individually addressable
-- HMAC signatures are written on creation but not re-verified on read; `/verify` only compares output hashes
 - All tool implementations are mocks — no real file I/O, HTTP, or DB access
 - No authentication or API keys on any endpoint
-- No automated tests
+- `RECEIPT_SECRET` falls back to a hardcoded dev default when unset — signatures are forgeable without it; always export it outside local development

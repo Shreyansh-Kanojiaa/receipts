@@ -1,6 +1,6 @@
-# Current State — Receipts AI
+# Current State — Receipts
 
-**Date:** 2026-06-21
+**Date:** 2026-06-22
 
 ## What exists
 
@@ -10,9 +10,9 @@ Both backend and frontend are fully built and running. A standalone Python demo 
 
 Five focused modules, no internal abstraction layers:
 
-- **`signer.py`** — `hash_dict()`, `sign_receipt()`, `build_receipt()`. Canonical form uses `json.dumps(sort_keys=True)`.
+- **`signer.py`** — `hash_dict()`, `sign_receipt()`, `verify_receipt_signature()`, `build_receipt()`. Canonical form uses `json.dumps(sort_keys=True)`.
 - **`tools.py`** — mock tools (`write_file`, `http_fetch`, `db_query`) + `execute_tool()` dispatcher.
-- **`database.py`** — sqlite3 CRUD: `init_db`, `insert_receipt`, `get_receipts_for_session`, `get_latest_receipt_for_tool`, `get_all_receipts`, `get_stats`. DB file: `backend/receipts.db`.
+- **`database.py`** — sqlite3 CRUD: `init_db`, `insert_receipt`, `get_receipts_for_session`, `get_receipt_for_session`, `get_all_receipts`, `get_stats`. DB file: `backend/receipts.db`.
 - **`models.py`** — Pydantic v2 request/response schemas.
 - **`main.py`** — route handlers:
   - `POST /tools/call`
@@ -24,16 +24,26 @@ Five focused modules, no internal abstraction layers:
 
 CORS middleware enabled (allow all origins).
 
+### Verification flow
+
+`POST /verify` accepts `{session_id, claimed_outputs: [{receipt_id, tool_name, output}]}`. Each claim is matched to that exact receipt within the session. It is verified only when the receipt's tool name and output hash match the claim and its HMAC signature is valid. Verdicts include `signature_valid` and a machine-readable `reason` when verification fails.
+
+The three built-in demos produce these outcomes:
+
+- `normal` — matching claims and receipts: `VERIFIED`
+- `lying` — invented receipt IDs with no tool calls: `UNVERIFIED`
+- `replit` — executes `db_query` but claims `write_file`: `CONTRADICTED`
+
 ## Frontend (`frontend/`)
 
-React 18 + Vite 5 + Tailwind 3. Runs at `http://localhost:5173`. All UI in `frontend/src/App.jsx` + `frontend/src/animations.js`. No routing library, no state management library.
+React 19 + Vite 8 + Tailwind 3. Runs at `http://localhost:5173`. All UI in `frontend/src/App.jsx` + `frontend/src/animations.js`. No routing library, no state management library.
 
 ### Design tokens (App.jsx)
 
 ```
-BG='#ede7da'  DARK='#1c1815'  RUST='#b85a2a'  GREEN='#4a7c4a'
-RED='#b94a3a'  CREAM='#faf4e8'  MUTED='#6b5e52'  MID='#3c342c'
-TMBG='#1a1612'  TMFG='#d9d4c8'
+BG='var(--bg)'  DARK='var(--fg)'  RUST='var(--rust)'  GREEN='var(--green)'
+RED='var(--red)'  CREAM='var(--cream)'  MUTED='var(--muted)'  MID='var(--mid)'
+TMBG='var(--tmbg)'  TMFG='var(--tmfg)'
 SERIF="'Source Serif 4','Times New Roman',serif"
 MONO="'JetBrains Mono',ui-monospace,..."
 ```
@@ -81,20 +91,30 @@ Tab transition: 200ms fade-out+slide-left → swap view → 300ms fade-in+slide-
 
 ```bash
 # Terminal 1 — backend
-cd ~/receipts-ai && source .venv/bin/activate
+cd ~/receipts && source .venv/bin/activate
 cd backend
 RECEIPT_SECRET=dev-secret python3 -m uvicorn main:app --reload
 
 # Terminal 2 — frontend
-cd ~/receipts-ai/frontend
+cd ~/receipts/frontend
 npm run dev
 # → http://localhost:5173
 ```
 
+## Tests
+
+```bash
+cd ~/receipts && source .venv/bin/activate
+python -m pytest
+```
+
+`tests/test_verification.py` uses isolated temporary SQLite databases. It covers receipt-ID requirements, repeated tool calls, output mismatches, tampered signatures, invalid receipt references, and all demo verdicts.
+
 ## What does NOT exist yet
 
 - Real tool implementations (everything is mocked — no actual file I/O, HTTP, or DB)
-- HMAC signature re-verification on read (`/verify` compares output hashes only, not the HMAC)
 - Authentication / API keys on any endpoint
-- Multi-call matching (verify finds the *most recent* receipt per tool per session)
-- Automated tests
+
+## Compatibility note
+
+`/verify` requires `receipt_id` for every claim. Legacy callers using only `tool_name` and `output` must be updated.

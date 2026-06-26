@@ -965,9 +965,10 @@ function ReconciliationView({ initialSession, onClearInitial }) {
   const [result, setResult]             = useState(null)
   const [error, setError]               = useState(null)
   const [copied, setCopied]             = useState(false)
-  const didAutoRunRef                   = useRef(false)
+  const didInitRef                      = useRef(false)
+  const autoRunIdRef                    = useRef(initialSession ?? null)
 
-  // Populate sessions dropdown from /sessions (includes auto_verdict)
+  // Populate sessions dropdown from /sessions (includes auto_verdict + verification_scope)
   useEffect(() => {
     fetch('/sessions')
       .then(r => r.json())
@@ -975,26 +976,86 @@ function ReconciliationView({ initialSession, onClearInitial }) {
       .catch(() => {})
   }, [])
 
-  // When a session with an auto_verdict is selected, show stored result immediately
   const selectedSession = sessions.find(s => s.session_id === selected)
+  const onRecord        = result?.onRecord === true // full_claim verdict shown without re-running
 
-  // Auto-run when arriving from ledger with a pre-selected session.
-  // Skip if the session already has a full_claim verdict — show it instead.
+  // Consume the pre-selected session passed from the ledger/sessions views.
+  // The actual display decision happens in the selection effect below.
   useEffect(() => {
-    if (!initialSession || didAutoRunRef.current) return
-    didAutoRunRef.current = true
+    if (!initialSession || didInitRef.current) return
+    didInitRef.current = true
+    autoRunIdRef.current = initialSession
     setSelected(initialSession)
     onClearInitial?.()
-    fetch(`/sessions/${initialSession}`)
-      .then(r => r.ok ? r.json() : null)
-      .then(s => {
-        if (s?.verification_scope === 'full_claim') return  // show stored verdict, don't overwrite
-        runForSession(initialSession)
-      })
-      .catch(() => runForSession(initialSession))
   }, [initialSession]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function runForSession(sessionId) {
+  // Drive the display whenever the selection (or the loaded session list) changes:
+  //   • full_claim + auto_verdict → show the stored verdict WITHOUT re-running
+  //     (re-running uses stored receipts as the claim source → always VERIFIED → circular).
+  //   • otherwise, auto-run only when the selection arrived from another view; a manual
+  //     dropdown pick waits for the button.
+  useEffect(() => {
+    if (!selected) { setResult(null); return }
+    const s = sessions.find(x => x.session_id === selected)
+    if (!s) return // session list not loaded yet
+    if (s.verification_scope === 'full_claim' && s.auto_verdict) {
+      autoRunIdRef.current = null
+      showStoredVerdict(s)
+    } else if (autoRunIdRef.current === selected) {
+      autoRunIdRef.current = null
+      runForSession(selected)
+    } else {
+      setResult(null) // manual selection — wait for the button
+    }
+  }, [selected, sessions]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Build a ReceiptCard-shaped verdict from a receipt's stored verdict string.
+  function storedVerdictObj(r) {
+    const vd = r.verdict
+    if (!vd) return null
+    return {
+      receipt_id:      r.id,
+      tool_name:       r.tool_name,
+      signature_valid: vd !== 'TAMPERED',
+      verified:        vd === 'VERIFIED',
+      claimed_hash:    r.output_hash,
+      // equal only when VERIFIED, so the output_hash MATCH row reflects the stored verdict
+      actual_hash:     vd === 'VERIFIED' ? r.output_hash : null,
+    }
+  }
+
+  // Show the verdict already on record (no verify-claim call) using stored receipts.
+  async function showStoredVerdict(s) {
+    setLoading(true)
+    setError(null)
+    setResult(null)
+    try {
+      const rr = await fetch(`/receipts/${s.session_id}`).then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      const verdictMap = {}
+      rr.forEach(r => {
+        const v = storedVerdictObj(r)
+        if (v) verdictMap[r.id] = v
+      })
+      setResult({
+        verdict:      s.auto_verdict,
+        verdicts:     Object.values(verdictMap),
+        receipts:     rr,
+        verdictMap,
+        session_id:   s.session_id,
+        generated_at: s.auto_verified_at ?? new Date().toISOString(),
+        onRecord:     true,
+      })
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function runForSession(sessionId, force = false) {
     if (!sessionId) return
     setLoading(true)
     setError(null)
@@ -1019,8 +1080,9 @@ function ReconciliationView({ initialSession, onClearInitial }) {
       }))
 
       // 3. POST /sessions/{id}/verify-claim — runs full reconciliation and
-      //    persists verification_scope='full_claim' on the session row.
-      const verRes = await fetch(`/sessions/${sessionId}/verify-claim`, {
+      //    persists verification_scope='full_claim' on the session row. force=true
+      //    overrides the backend's guard against overwriting an existing full_claim verdict.
+      const verRes = await fetch(`/sessions/${sessionId}/verify-claim${force ? '?force=true' : ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId, claimed_outputs: claimedOutputs }),
@@ -1030,6 +1092,19 @@ function ReconciliationView({ initialSession, onClearInitial }) {
         throw new Error(body.detail || `HTTP ${verRes.status}`)
       }
       const verData = await verRes.json()
+
+      // Backend guard: a full_claim verdict is already on record. Show it instead of
+      // a circular re-run (only happens when force was not requested).
+      if (verData.already_verified) {
+        const s = sessions.find(x => x.session_id === sessionId)
+        await showStoredVerdict({
+          session_id: sessionId,
+          auto_verdict: verData.verdict,
+          auto_verified_at: s?.auto_verified_at,
+          verification_scope: 'full_claim',
+        })
+        return
+      }
 
       // 4. Derive top-level verdict
       const vs = verData.verdicts ?? []
@@ -1091,14 +1166,14 @@ function ReconciliationView({ initialSession, onClearInitial }) {
           ))}
         </select>
         <button
-          onClick={() => runForSession(selected)}
+          onClick={() => runForSession(selected, onRecord)}
           disabled={loading || !selected}
           style={{
             padding: '7px 16px', flexShrink: 0,
-            background: loading || !selected ? SURF2 : BLUE,
-            border: `1px solid ${loading || !selected ? BORDER : BLUE}`,
+            background: loading || !selected ? SURF2 : onRecord ? 'transparent' : BLUE,
+            border: `1px solid ${loading || !selected ? BORDER : onRecord ? AMBER : BLUE}`,
             borderRadius: 3,
-            color: loading || !selected ? MUTED : '#fff',
+            color: loading || !selected ? MUTED : onRecord ? AMBER : '#fff',
             fontFamily: MONO, fontSize: 12,
             cursor: loading || !selected ? 'not-allowed' : 'pointer',
             display: 'flex', alignItems: 'center', gap: 8,
@@ -1107,10 +1182,22 @@ function ReconciliationView({ initialSession, onClearInitial }) {
         >
           {loading
             ? <><span style={{ display: 'inline-block', animation: 'spin 1s linear infinite' }}>⟳</span>Running...</>
-            : 'Run Reconciliation'
+            : onRecord ? 'Re-run Reconciliation' : 'Run Reconciliation'
           }
         </button>
       </div>
+
+      {/* Re-run warning — shown when a full_claim verdict is already on record */}
+      {onRecord && !loading && (
+        <div style={{
+          padding: '10px 12px', background: 'rgba(245,158,11,0.06)',
+          border: `1px solid rgba(245,158,11,0.25)`, borderRadius: 3,
+          color: AMBER, fontFamily: SANS, fontSize: 12, lineHeight: 1.5,
+        }}>
+          This session already has a full claim verdict. Re-running will use stored receipts
+          as the claim source and may not reflect the original agent claim.
+        </div>
+      )}
 
       {/* inline error */}
       {error && (
@@ -1186,6 +1273,23 @@ function ReconciliationView({ initialSession, onClearInitial }) {
 
       {result && !loading && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* On-record label — stored full_claim verdict, not a fresh re-run */}
+          {onRecord && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{
+                fontFamily: MONO, fontSize: 10, color: AMBER,
+                padding: '2px 7px', border: `1px solid rgba(245,158,11,0.35)`, borderRadius: 2,
+                letterSpacing: '0.04em',
+              }}>
+                ON RECORD
+              </span>
+              <span style={{ fontFamily: SANS, fontSize: 12, color: MUTED }}>
+                Full claim verification on record
+                {result.generated_at ? ` · ${new Date(result.generated_at).toLocaleString()}` : ''}
+              </span>
+            </div>
+          )}
+
           {/* Part A: Verdict banner */}
           <ReconcileVerdictBanner verdict={result.verdict} />
 

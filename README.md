@@ -2,6 +2,10 @@
 
 A FastAPI proxy that intercepts AI agent tool calls, executes them, and produces HMAC-SHA256 signed receipts. A reconciliation engine verifies whether stored receipts are authentic and untampered. A React + Vite frontend shows every receipt and verdict in real time, with session-based reconciliation built in.
 
+![Live Ledger — every tool call signed and verdicted in real time](docs/live-ledger.png)
+
+The **Live Ledger** streams every tool call as it happens: timestamp, session, tool, input hash, execution status, and the verification verdict. Green `VERIFIED` rows mean the agent's claim matched its signed receipt; amber `CONTRADICTED` rows mean the agent reported something different from what actually ran.
+
 ## Stack
 
 - **Backend:** Python 3 + FastAPI + SQLite (`backend/`)
@@ -102,6 +106,8 @@ The system distinguishes two kinds of verification:
 The Live Ledger and Sessions tab show a `sig. only` label under verdict pills when the scope is `signature_only`, signalling that a manual reconciliation would be more informative.
 
 The **Reconciliation** tab automates full-claim verification — pick a session, click "Run Reconciliation", and the UI fetches stored receipts, builds the verification payload, and shows a per-receipt breakdown. From the Live Ledger, expand any row and click **"Reconcile this session →"** to jump directly to the Reconciliation view.
+
+**Circular re-run guard.** Reconciliation builds the claim from the stored receipts themselves, so re-verifying a session that already has a `full_claim` verdict would always collapse to `VERIFIED` — silently destroying a real `CONTRADICTED` result. To prevent this, `/sessions/{id}/verify-claim` returns the verdict already on record (`{"already_verified": true, ...}`) instead of re-running, unless `?force=true` is passed. The UI shows the stored verdict with an "ON RECORD" label and only re-runs on an explicit, warned "Re-run Reconciliation" click.
 
 ## Stats keys
 

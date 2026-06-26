@@ -163,12 +163,30 @@ async def close_session_endpoint(session_id: str, background_tasks: BackgroundTa
 
 
 @app.post("/sessions/{session_id}/verify-claim")
-def verify_claim(session_id: str, req: VerifyRequest):
+def verify_claim(session_id: str, req: VerifyRequest, force: bool = False):
     """Full-claim reconciliation: verify agent claimed_outputs against stored receipts.
 
     Updates the session verdict with scope='full_claim' so the frontend can distinguish
     this from a signature-only auto-verify result.
+
+    Guard: if the session already carries a full_claim verdict, re-running here would
+    re-verify the stored receipts against themselves (the caller has no copy of the
+    original agent claim), which always collapses to VERIFIED — silently destroying a
+    CONTRADICTED verdict from demo_run. So unless ?force=true is passed, return the
+    verdict already on record and let the caller decide whether to force a re-run.
     """
+    session = get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    if not force and session.get("verification_scope") == "full_claim" and session.get("auto_verdict"):
+        return {
+            "already_verified": True,
+            "verdict": session["auto_verdict"],
+            "verification_scope": "full_claim",
+            "message": "Session already has full claim verification on record",
+        }
+
     verdicts = run_verify(session_id, req.claimed_outputs)
     verdict  = derive_verdict(verdicts)
 

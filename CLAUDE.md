@@ -51,8 +51,8 @@ With the backend running on `localhost:8000`, run these from the repository root
 
 ```bash
 python3 demo_agent.py --mode normal   # honest agent — claims match receipts → VERIFIED
-python3 demo_agent.py --mode lying    # agent tampers with reported output → CONTRADICTED
-python3 demo_agent.py --mode replit   # agent reports results with no tool calls → UNVERIFIED
+python3 demo_agent.py --mode lying    # agent reports output but never called any tool (no receipts) → UNVERIFIED
+python3 demo_agent.py --mode replit   # agent claims a write_file it never ran (only db_query) → CONTRADICTED
 ```
 
 Or use the live buttons in the frontend at `http://localhost:5173`.
@@ -61,52 +61,30 @@ Or use the live buttons in the frontend at `http://localhost:5173`.
 
 ### Frontend (`frontend/`)
 
-React 19 + Vite 8 + Tailwind 3. All app logic lives in two files (alongside `main.jsx` entry point, `index.css`/`App.css` styles, and `assets/`):
-- `frontend/src/App.jsx` — all components, hooks, and view logic
-- `frontend/src/animations.js` — scroll animation system (`initAnimations`, `countUp`)
+React 19 + Vite 8. It is a **dashboard-only SPA** — there is no landing page. All app logic lives in two files (alongside `main.jsx` entry point, `index.css`/`App.css` styles, and `assets/`):
+- `frontend/src/App.jsx` — every component, hook, and view (~1400 lines, all in one file)
+- `frontend/src/animations.js` — exports only `countUp(from, to, duration, onUpdate)` (easeOutQuart, used by LedgerView stat counters)
 
 No routing library, no state management library.
 
 - `vite.config.js` — proxies `/demo`, `/tools`, `/receipts`, `/verify`, `/stats`, `/sessions` to `localhost:8000`
-- `tailwind.config.js` — extends with `beige: #f5f0e8`, `rust: #c4622d`, `font-serif: Source Serif 4`, `font-mono: JetBrains Mono`
-- `src/index.css` — Tailwind directives + all keyframes and animation classes
+- `tailwind.config.js` — Tailwind is wired up (`@tailwind` directives in `index.css`) but `theme.extend` is empty; the app is styled almost entirely with **inline `style={{}}` objects** referencing JS constants (`BG`, `TEXT`, `BLUE`, `MONO`, `SANS`, …) at the top of App.jsx, which in turn reference CSS custom properties.
+- `src/index.css` — `@tailwind` directives, design tokens under `:root` (`--mono` = JetBrains Mono, `--sans` = Inter, plus color vars), and all `@keyframes` (`row-highlight`, `pill-in`, `view-exit`/`view-enter`, `toast-in`/`toast-out`, `skeleton-pulse`, `spin`).
 
-**Design tokens:** App.jsx constants reference CSS custom properties. Light and dark values are defined in `src/index.css` under `:root` and `[data-theme="dark"]`.
+**Layout:** fixed `Sidebar` (220px) + `Header` bar + `main` content area. `App` (bottom of App.jsx) holds the top-level state: `view`, `proxyOnline`, `toast`, `showFullHashes`, `reconcileSession`.
 
-**Design rule: zero emojis.** Status indicators use CSS dots (`.dot`, `.dot-green`, `.dot-red`, `.dot-rust`). CONTRADICTED = bold red uppercase. VERIFIED = green CSS dot + green monospace text.
+**Four views** (sidebar `NAV_ITEMS`), switched by `switchView(next)` — plays a 150ms `view-exit` animation, swaps `view`, then a 200ms `view-enter`:
+1. **`ledger`** — `LedgerView`. Polls `/stats` + `/receipts/all` + `/sessions` every 3s (toggle via `autoRefresh`). Four stat cards: **Total Receipts**, **Verified** (`verdict='VERIFIED'`), **Successful Calls** (`status='success'`), **Tamper Alerts** (`verdict='TAMPERED'`) — successful-call and verified counts are intentionally distinct (a tool can run fine while the agent lies about its output). Stats count up from 0 on first load. New receipt rows are diffed against the previous id set and highlighted (`row-highlight`). Rows expand on click (`expandedId`). Has search, verdict filter, and time filter. Each row links to reconciliation via `onReconcile`.
+2. **`sessions`** — `SessionsView`. Polls `/sessions` every 5s; status pills and a per-session "reconcile" link (`onReconcile`).
+3. **`reconciliation`** — `ReconciliationView`. Session dropdown (from `/sessions`); see "Reconciliation flow" below. Reached from the other views via `goReconcile(sessionId)`, which sets `reconcileSession` and switches view.
+4. **`settings`** — `SettingsView`. Toggles `showFullHashes` (full vs. truncated hashes in the ledger).
 
-**Two views:** Landing (full page) and Dashboard (Verdicts + Live Ledger). Switched via `switchView()` — 200ms exit animation, then swap state, then 300ms enter animation. Dashboard has four tabs: Live Ledger, Sessions, Reconciliation. Navigating from Live Ledger or Sessions to Reconciliation uses `goReconcile(sessionId)` which sets `reconcileSession` state in `App`. ReconciliationView checks the session's `verification_scope` on mount — if `full_claim` already exists it shows the stored verdict without re-running; if `signature_only` or no scope it auto-runs.
+**Other behavior:**
+- `proxyOnline` is polled every 5s by fetching `/stats`; `OfflineBanner` shows when the backend is unreachable.
+- `generateReport()` (Sidebar "Report" button) fetches `/receipts/all` + `/stats` and downloads a JSON audit file via a Blob; surfaces a `Toast`.
+- `JsonHighlight`, `Pill`, `Dot`, `StatCard`, `ReceiptCard`, `LedgerRow` are the shared presentational components.
 
-**Landing page sections (in order):**
-1. **Nav** — sticky, transparent → frosted at 100px scroll (`[data-nav]` / `.nav-scrolled`). Active section underline slides via `data-nav-link`.
-2. **Hero** — staggered `data-animate="fade-up"` (0/150/300/450/600ms). Receipt card: `data-animate="fade-right"`, then continuous float at −2.2deg.
-3. **How It Works** — 2×3 bordered grid, 6 steps, `stagger-children` 100ms.
-4. **Incidents** — two story cards (left/right). Viewport-triggered typing animation via `IntersectionObserver` → `setTimeout(play, 900)`, fires once. Replay button resets.
-5. **Anatomy** — left sticky block fades from left; right 7-field table rows stagger up 80ms.
-6. **Three Verdicts** — three live demo columns, each calls `POST /demo/run`, `stagger-children` 120ms.
-7. **Quickstart** — split layout, setup terminal on right.
-8. **Footer**
-
-**Animation system (`animations.js`):**
-- `initAnimations()` returns a cleanup function. Called in `useEffect([view])` with a 50ms delay after view change.
-- Single `IntersectionObserver` at 15% threshold handles all `[data-animate]` elements. Stagger containers get per-child `transitionDelay` set before `is-visible` is added.
-- `watchNavScroll()` — toggles `.nav-scrolled` at 100px scroll.
-- `watchActiveSections()` — slides active link underline in/out per section at 35% threshold.
-- `countUp(from, to, duration, onUpdate)` — easeOutQuart, exported for use in LiveSection.
-- `prefers-reduced-motion` fully respected: elements revealed instantly, animations disabled via CSS.
-
-**Story hooks (`useStory1`, `useStory2`):**
-- `play()` / `clear()` callbacks manage `setInterval` / `setTimeout` timers via a `useRef` array.
-- `useEffect` only runs cleanup (no auto-play on mount).
-- Per-component `IntersectionObserver` in `Story1` / `Story2` triggers `setTimeout(play, 900)` once on viewport entry.
-- Typing uses functional state updaters (`setL1(S1_CMD.slice(0, i))`) to avoid stale closures.
-
-**LiveSection:**
-- Polls `/stats` + `/receipts/all` every 3 seconds.
-- Receipt stat cards (top row): **Total Receipts**, **Verified Claims** (`verdict='VERIFIED'`, green), **Successful Calls** (`status='success'`, blue), **Tamper Alerts** (`verdict='TAMPERED'`, red). Note: a tool can run successfully but the agent can still lie about its output — these two counts are intentionally distinct.
-- Stats count up from 0 on first load (`hasCountedRef` guards against repeat).
-- New rows detected via `prevIdsRef` set diff — highlighted with `.row-new` (amber 2s fade).
-- Click any row to expand full detail via `expandedId` state + `max-height` transition (`.row-detail`).
+**Status display:** no emojis in the UI. CONTRADICTED/TAMPERED render as bold red; VERIFIED renders green via `verdictColor()` + `Dot`/`Pill`.
 
 ### Backend (`backend/`)
 
@@ -127,9 +105,9 @@ All backend code lives in `backend/`. Five focused modules with no internal abst
 
 - **`auto_verify.py`** — checks HMAC signatures only (does NOT use `run_verify`). Detects `TAMPERED` (bad signature) or `VERIFIED` (all intact). Writes `verdict='TAMPERED'` to individual receipt rows for tampered receipts (so the ledger and tamper_alerts stat reflect tampering caught on this path); does not stamp `VERIFIED` on receipt rows since a valid signature alone doesn't verify the agent's claim. Cannot detect `CONTRADICTED` or `UNVERIFIED` without the agent's original claims. Skips if `verification_scope='full_claim'` already set. Returns `None` for sessions with no receipts (status set to `'closed'`, no verdict written).
 
-- **`main.py`** — route handlers. `/tools/call` executes → signs → stores → upserts session → returns receipt. `/receipts/all` defined before `/receipts/{session_id}` to avoid FastAPI routing conflict. `/verify` delegates to `run_verify`. `/demo/run?mode=X` orchestrates a full scenario, runs verify, then persists the session verdict with `scope='full_claim'`. Session routes: `GET /sessions`, `GET /sessions/{id}`, `POST /sessions/{id}/close` (triggers async auto_verify), `POST /sessions/{id}/verify-claim` (full-claim manual reconciliation, writes `scope='full_claim'`). Lifespan starts `timeout_checker_loop` which closes and auto-verifies sessions idle for 30s.
+- **`main.py`** — route handlers. `/tools/call` executes → signs → stores → upserts session → returns receipt. `/receipts/all` defined before `/receipts/{session_id}` to avoid FastAPI routing conflict. `/verify` delegates to `run_verify`. `/demo/run?mode=X` orchestrates a full scenario, runs verify, then persists the session verdict with `scope='full_claim'`. Session routes: `GET /sessions`, `GET /sessions/{id}`, `POST /sessions/{id}/close` (triggers async auto_verify), `POST /sessions/{id}/verify-claim` (full-claim manual reconciliation, writes `scope='full_claim'`; guards against re-verifying a session that already has a `full_claim` verdict — returns `{already_verified, verdict, verification_scope, message}` instead, unless `?force=true` is passed). Lifespan starts `timeout_checker_loop` which closes and auto-verifies sessions idle for 30s.
 
-- **`demo_agent.py`** — standalone `requests`-based demonstration client at the repository root. The frontend's live demo buttons call `/demo/run` instead.
+- **`demo_agent.py`** — standalone `requests`-based demonstration client at the repository root. It drives `/tools/call` + `/verify` directly (not `/demo/run`). `/demo/run` is exercised by the test suite and by curl/`/docs`; the dashboard frontend does not call it.
 
 ### API endpoints
 
@@ -166,14 +144,16 @@ Two different things can be verified, and the system tracks which has been done:
 `verified` → `auto_verify` or `verify-claim` completes and writes verdict + scope
 
 ### Reconciliation flow (frontend)
-Session dropdown populated from `/sessions`. Clicking "Run Reconciliation" fetches `/receipts/{session_id}` to get stored `tool_output`, builds `claimed_outputs` from those actual values, and POSTs to `/sessions/{id}/verify-claim` (not `/verify`) so the result is persisted with `scope='full_claim'`. Results show a full-width verdict banner and one `ReceiptCard` per receipt with a 4-field comparison table. The Live Ledger's expanded row detail has a "Reconcile this session →" button. If the session already has a `full_claim` verdict, the view shows it without auto-running (to avoid overwriting a CONTRADICTED verdict from `demo_run` with a self-referential VERIFIED).
+Session dropdown populated from `/sessions`. Clicking "Run Reconciliation" fetches `/receipts/{session_id}` to get stored `tool_output`, builds `claimed_outputs` from those actual values, and POSTs to `/sessions/{id}/verify-claim` (not `/verify`) so the result is persisted with `scope='full_claim'`. Results show a full-width verdict banner and one `ReceiptCard` per receipt with a 4-field comparison table. The Live Ledger's expanded row detail has a "Reconcile this session →" button.
+
+**Circular re-run guard.** Reconciliation builds the claim from the *stored* receipts, so re-verifying a session always collapses to VERIFIED (the claim is its own source of truth) — which would silently destroy a `CONTRADICTED`/`UNVERIFIED` verdict from `demo_run`. So when a selected session already has `verification_scope='full_claim'` with an `auto_verdict`, `ReconciliationView` (via `showStoredVerdict`) renders the **stored** verdict immediately without calling `verify-claim` — top banner from `auto_verdict`, per-receipt cards synthesized from each receipt's stored `verdict` string — and shows an "ON RECORD / Full claim verification on record" label. The button changes to "Re-run Reconciliation" with a warning, and only an explicit click POSTs with `?force=true` to override the backend guard. The backend enforces the same guard server-side (returns `already_verified` unless forced), which `runForSession` also handles defensively.
 
 ### Tests
 
 `tests/test_verification.py` (12 tests) uses isolated temporary SQLite databases. Covers: exact receipt matching for repeated tool calls, tampered signatures, missing/cross-session/tool-mismatched references, all demo modes, auto_verify signature-only logic, session timeout detection, and explicit close endpoint with background auto-verify.
 
 ## Repo hygiene note
-A `.gitignore` is in the repo root. `backend/receipts.db`, `__pycache__/`, `.venv/`, and `frontend/node_modules/` are excluded. `current_state.md` and the root `Receipts Landing.html` (1.4MB) are scratch/reference artifacts not part of the build — they are not excluded by the current `.gitignore` and should not be committed.
+A `.gitignore` is in the repo root. `backend/receipts.db`, `__pycache__/`, `.venv/`, and `frontend/node_modules/` are excluded. `current_state.md` is a scratch/reference artifact not part of the build (it is currently tracked but is not used by the app).
 
 ## Known limitations (not yet implemented)
 - All tool implementations are mocks — no real file I/O, HTTP, or DB access occurs

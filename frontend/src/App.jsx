@@ -947,7 +947,7 @@ function SessionsView({ onReconcile }) {
     return () => { active = false; clearInterval(t) }
   }, [])
 
-  const COL = '1fr 120px 80px 60px 100px 110px 90px 16px'
+  const COL = '1fr 120px 80px 60px 100px 110px minmax(110px,auto) 16px'
 
   return (
     <div>
@@ -2397,7 +2397,7 @@ export default function App() {
         onReport={() => generateReport(setToast)}
       />
 
-      <div style={{ marginLeft: 220, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ marginLeft: 220, flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <Header view={view} proxyOnline={proxyOnline} />
 
         <main

@@ -2187,9 +2187,13 @@ function HelpView() {
       <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: DIM, marginBottom: 16 }}>HELP_DOCS</div>
 
       <HelpSection title="Connecting Claude Code">
-        <HelpStep n={1} text="Make sure the Receipts backend is running." />
-        <CodeBlock code={`cd /path/to/receipts
-RECEIPT_SECRET=your-secret python3 -m uvicorn backend.main:app --port 8000`} />
+        <HelpStep n={1} text="Install the proxy and start the backend." />
+        <CodeBlock code={`pip install receipts-mcp
+
+cd /path/to/receipts/backend
+RECEIPT_SECRET=your-secret \\
+API_KEYS="proxy:proxy:your-proxy-key" \\
+python3 -m uvicorn main:app --port 8000`} />
 
         <HelpStep n={2} text="Add the MCP server config to ~/.claude/claude_mcp_config.json." />
         <CodeBlock lang="json" code={`{
@@ -2197,9 +2201,9 @@ RECEIPT_SECRET=your-secret python3 -m uvicorn backend.main:app --port 8000`} />
     "receipts": {
       "command": "python3",
       "args": ["-m", "receipts_mcp"],
-      "cwd": "/path/to/receipts",
       "env": {
-        "RECEIPTS_URL": "http://localhost:8000"
+        "RECEIPTS_URL": "http://localhost:8000",
+        "RECEIPTS_API_KEY": "your-proxy-key"
       }
     }
   }
@@ -2218,9 +2222,9 @@ RECEIPT_SECRET=your-secret python3 -m uvicorn backend.main:app --port 8000`} />
   "receipts": {
     "command": "python3",
     "args": ["-m", "receipts_mcp"],
-    "cwd": "/path/to/receipts",
     "env": {
-      "RECEIPTS_URL": "http://localhost:8000"
+      "RECEIPTS_URL": "http://localhost:8000",
+      "RECEIPTS_API_KEY": "your-proxy-key"
     }
   }
 }`} />
@@ -2272,6 +2276,8 @@ RECEIPT_SECRET=your-secret python3 -m uvicorn backend.main:app --port 8000`} />
   "receipt_id": "...",
   "tool_name": "delete_file",
   "timestamp": "...",
+  "input_hash": "sha256:...",
+  "output_hash": "sha256:...",
   "hmac_signature": "...",
   "source": "receipts-v1"
 }`} />

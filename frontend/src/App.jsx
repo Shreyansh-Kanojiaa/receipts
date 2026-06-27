@@ -280,7 +280,7 @@ const VIEW_TITLES = {
   settings:       'CONFIG_SYS',
 }
 
-function Header({ view, proxyOnline }) {
+function Header({ view, proxyOnline, sidebarW }) {
   return (
     <header style={{
       height: 48,
@@ -291,8 +291,9 @@ function Header({ view, proxyOnline }) {
       justifyContent: 'space-between',
       padding: '0 20px',
       position: 'fixed',
-      top: 0, left: 220, right: 0,
+      top: 0, left: sidebarW, right: 0,
       zIndex: 10,
+      transition: 'left 0.18s ease',
     }}>
       <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', color: TEXT }}>
         {VIEW_TITLES[view]}
@@ -1853,7 +1854,7 @@ function AlertsView() {
   }
 
   return (
-    <div style={{ maxWidth: 680 }}>
+    <div>
       {/* header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
         <span style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: DIM }}>ALERT_RULES</span>
@@ -2182,7 +2183,7 @@ function HelpSubSection({ title, children }) {
 
 function HelpView() {
   return (
-    <div style={{ maxWidth: 720 }}>
+    <div style={{ maxWidth: 900 }}>
       <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: DIM, marginBottom: 16 }}>HELP_DOCS</div>
 
       <HelpSection title="Connecting Claude Code">
@@ -2295,7 +2296,7 @@ function SettingsView({ showFullHashes, setShowFullHashes }) {
   ]
 
   return (
-    <div style={{ maxWidth: 560 }}>
+    <div style={{ maxWidth: 760 }}>
       <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: DIM, marginBottom: 12 }}>CONFIG_SYS</div>
       <div style={{ border: `1px solid ${BORDER}`, borderRadius: 2, overflow: 'hidden', marginBottom: 20 }}>
         {settings.map(([key, val], i) => (
@@ -2450,7 +2451,7 @@ export default function App() {
       />
 
       <div style={{ marginLeft: sidebarCollapsed ? SIDEBAR_W_COL : SIDEBAR_W, flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', transition: 'margin-left 0.18s ease' }}>
-        <Header view={view} proxyOnline={proxyOnline} />
+        <Header view={view} proxyOnline={proxyOnline} sidebarW={sidebarCollapsed ? SIDEBAR_W_COL : SIDEBAR_W} />
 
         <main
           className={contentClass}

@@ -12,6 +12,7 @@ export default defineConfig({
       '/verify':   'http://localhost:8000',
       '/stats':    'http://localhost:8000',
       '/sessions': 'http://localhost:8000',
+      '/alerts':   'http://localhost:8000',
     },
   },
 })

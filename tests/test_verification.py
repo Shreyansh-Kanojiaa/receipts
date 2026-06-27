@@ -223,7 +223,17 @@ def test_session_timeout_detection(isolated_database):
 
 
 def test_explicit_close_endpoint(isolated_database):
+    from datetime import datetime, timezone
     from fastapi.testclient import TestClient
+    import auth
+
+    # Seed a proxy key directly (settings-based seeding is empty in tests).
+    auth_key = "test-proxy-key"
+    database.insert_api_key(
+        id="k1", key_hash=auth.hash_key(auth_key), label="test",
+        role="proxy", created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    headers = {"Authorization": f"Bearer {auth_key}"}
 
     with TestClient(main.app) as client:
         resp = client.post(
@@ -233,10 +243,11 @@ def test_explicit_close_endpoint(isolated_database):
                 "tool_input": {"path": "/tmp/out.txt", "content": "hello"},
                 "session_id": "session-close",
             },
+            headers=headers,
         )
         assert resp.status_code == 201
 
-        resp = client.post("/sessions/session-close/close")
+        resp = client.post("/sessions/session-close/close", headers=headers)
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "closed"
@@ -248,3 +259,68 @@ def test_explicit_close_endpoint(isolated_database):
     assert session is not None
     assert session["status"] == "verified"
     assert session["auto_verdict"] == "VERIFIED"
+
+
+def test_record_endpoint_signs_real_output(isolated_database):
+    """The proxy path: /tools/record signs an already-executed call without running it."""
+    from datetime import datetime, timezone
+    from fastapi.testclient import TestClient
+    import auth
+    from signer import verify_receipt_signature
+
+    database.insert_api_key(
+        id="kp", key_hash=auth.hash_key("proxy-key"), label="t",
+        role="proxy", created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    with TestClient(main.app) as client:
+        resp = client.post(
+            "/tools/record",
+            json={
+                "session_id": "rec-sess",
+                "tool_name": "github__create_issue",
+                "tool_input": {"title": "bug"},
+                "tool_output": {"number": 7, "url": "http://x/7"},
+                "status": "success",
+            },
+            headers={"Authorization": "Bearer proxy-key"},
+        )
+    assert resp.status_code == 201
+    receipt = resp.json()
+    assert receipt["tool_name"] == "github__create_issue"
+    assert receipt["tool_output"] == {"number": 7, "url": "http://x/7"}
+    assert verify_receipt_signature(receipt)
+
+
+def test_auth_required_and_role_enforced(isolated_database):
+    from datetime import datetime, timezone
+    from fastapi.testclient import TestClient
+    import auth
+
+    database.insert_api_key(
+        id="kv", key_hash=auth.hash_key("viewer-key"), label="t",
+        role="viewer", created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    with TestClient(main.app) as client:
+        # No key → 401
+        assert client.get("/stats").status_code == 401
+        # Invalid key → 401
+        assert client.get(
+            "/stats", headers={"Authorization": "Bearer nope"}
+        ).status_code == 401
+        # Viewer key on a read endpoint → 200
+        assert client.get(
+            "/stats", headers={"Authorization": "Bearer viewer-key"}
+        ).status_code == 200
+        # Viewer key on a write endpoint → 403
+        resp = client.post(
+            "/tools/record",
+            json={
+                "session_id": "s", "tool_name": "t",
+                "tool_input": {}, "tool_output": {}, "status": "success",
+            },
+            headers={"Authorization": "Bearer viewer-key"},
+        )
+        assert resp.status_code == 403
+        # Health endpoints need no auth
+        assert client.get("/healthz").status_code == 200
+        assert client.get("/readyz").status_code == 200

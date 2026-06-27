@@ -9,6 +9,20 @@ class ToolCallRequest(BaseModel):
     session_id: str
 
 
+class ToolRecordRequest(BaseModel):
+    """An already-executed tool call to be signed and stored.
+
+    Used by the MCP proxy: the upstream MCP server runs the tool, and the proxy
+    sends the real input/output here to be receipted. Unlike ToolCallRequest, the
+    backend does NOT execute anything — it only signs and persists.
+    """
+    tool_name: str
+    tool_input: dict[str, Any]
+    tool_output: dict[str, Any]
+    status: Literal["success", "error"]
+    session_id: str
+
+
 class ReceiptResponse(BaseModel):
     id: str
     session_id: str
@@ -74,3 +88,28 @@ class CloseSessionResponse(BaseModel):
     status: str
     receipt_count: int
     auto_verify_scheduled: bool
+
+
+class AlertRuleCreate(BaseModel):
+    name: str
+    trigger: Literal["CONTRADICTED", "TAMPERED", "UNVERIFIED", "ANY"]
+    channel: Literal["webhook", "email", "slack"]
+    config: dict[str, Any]
+
+
+class AlertRuleUpdate(BaseModel):
+    name: str | None = None
+    enabled: bool | None = None
+    trigger: Literal["CONTRADICTED", "TAMPERED", "UNVERIFIED", "ANY"] | None = None
+    channel: Literal["webhook", "email", "slack"] | None = None
+    config: dict[str, Any] | None = None
+
+
+class AlertRuleResponse(BaseModel):
+    id: str
+    name: str
+    enabled: bool
+    trigger: str
+    channel: str
+    config: dict[str, Any]
+    created_at: str

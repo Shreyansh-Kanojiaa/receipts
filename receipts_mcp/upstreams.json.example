@@ -1,0 +1,17 @@
+{
+  "_comment": "Copy to upstreams.json and list your real MCP servers. ${ENV_VAR} refs in env/headers are expanded from the environment so secrets stay out of this file. Remove this file (or set include_demo_tools) to fall back to the built-in demo tools.",
+  "upstreams": {
+    "filesystem": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"],
+      "env": {}
+    },
+    "github": {
+      "transport": "streamable_http",
+      "url": "https://mcp.internal.example.com/github",
+      "headers": { "Authorization": "Bearer ${GITHUB_MCP_TOKEN}" }
+    }
+  },
+  "include_demo_tools": false
+}

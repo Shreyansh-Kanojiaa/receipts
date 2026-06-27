@@ -17,6 +17,19 @@ const SURF2  = 'var(--surface-2)'
 const BORDER = 'var(--border)'
 const BORDER2= 'var(--border-2)'
 
+// ── API access ────────────────────────────────────────────────────────────────
+// In production the SPA is served behind nginx, which proxies these paths and
+// injects the viewer Authorization header — so API_BASE stays empty (same-origin)
+// and no key ships in the bundle. In dev, set VITE_BACKEND_URL / VITE_RECEIPTS_VIEWER_KEY.
+const API_BASE = import.meta.env.VITE_BACKEND_URL || ''
+const VIEWER_KEY = import.meta.env.VITE_RECEIPTS_VIEWER_KEY || ''
+
+function apiFetch(path, opts = {}) {
+  const headers = { ...(opts.headers || {}) }
+  if (VIEWER_KEY) headers['Authorization'] = `Bearer ${VIEWER_KEY}`
+  return fetch(API_BASE + path, { ...opts, headers })
+}
+
 // ── tiny shared helpers ───────────────────────────────────────────────────────
 function fmtTs(ts) {
   if (!ts) return '—'
@@ -71,34 +84,34 @@ function Dot({ color }) {
   )
 }
 
+// ── JSON tokenizer: keys blue, string values green, numbers/booleans/null amber ─
+function _tokenizeJsonLine(line, i) {
+  const parts = []
+  const re = /("(?:[^"\\]|\\.)*")(\s*:\s*)?("(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)?/g
+  let last = 0, m
+  while ((m = re.exec(line)) !== null) {
+    if (m.index > last) parts.push(<span key={`t${i}-${last}`}>{line.slice(last, m.index)}</span>)
+    if (m[2]) {
+      parts.push(<span key={`k${i}-${m.index}`} style={{ color: '#60a5fa' }}>{m[1]}</span>)
+      parts.push(<span key={`c${i}-${m.index}`}>{m[2]}</span>)
+      if (m[3] !== undefined) {
+        const isStr = m[3].startsWith('"')
+        const isNum = !isStr && m[3] !== 'true' && m[3] !== 'false' && m[3] !== 'null'
+        const col = isStr ? '#4ade80' : isNum ? '#fbbf24' : MUTED
+        parts.push(<span key={`v${i}-${m.index}`} style={{ color: col }}>{m[3]}</span>)
+      }
+    } else {
+      parts.push(<span key={`s${i}-${m.index}`} style={{ color: '#4ade80' }}>{m[1]}</span>)
+    }
+    last = m.index + m[0].length
+  }
+  if (last < line.length) parts.push(<span key={`e${i}-${last}`}>{line.slice(last)}</span>)
+  return <div key={i}>{parts.length ? parts : line}</div>
+}
+
 // ── syntax-highlight JSON (keys blue, strings green, numbers amber) ───────────
 function JsonHighlight({ obj }) {
-  const json = JSON.stringify(obj, null, 2)
-  const lines = json.split('\n').map((line, i) => {
-    const parts = []
-    // match: "key": value
-    const re = /("(?:[^"\\]|\\.)*")(\s*:\s*)?("(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)?/g
-    let last = 0, m
-    while ((m = re.exec(line)) !== null) {
-      if (m.index > last) parts.push(<span key={`t${i}-${last}`}>{line.slice(last, m.index)}</span>)
-      // key (followed by colon)
-      if (m[2]) {
-        parts.push(<span key={`k${i}-${m.index}`} style={{ color: '#60a5fa' }}>{m[1]}</span>)
-        parts.push(<span key={`c${i}-${m.index}`}>{m[2]}</span>)
-        if (m[3] !== undefined) {
-          const isStr = m[3].startsWith('"')
-          const isNum = !isStr && m[3] !== 'true' && m[3] !== 'false' && m[3] !== 'null'
-          const col = isStr ? '#4ade80' : isNum ? '#fbbf24' : MUTED
-          parts.push(<span key={`v${i}-${m.index}`} style={{ color: col }}>{m[3]}</span>)
-        }
-      } else {
-        parts.push(<span key={`s${i}-${m.index}`} style={{ color: '#4ade80' }}>{m[1]}</span>)
-      }
-      last = m.index + m[0].length
-    }
-    if (last < line.length) parts.push(<span key={`e${i}-${last}`}>{line.slice(last)}</span>)
-    return <div key={i}>{parts.length ? parts : line}</div>
-  })
+  const lines = JSON.stringify(obj, null, 2).split('\n').map(_tokenizeJsonLine)
   return (
     <pre style={{
       margin: 0, padding: '10px 12px',
@@ -118,10 +131,12 @@ function JsonHighlight({ obj }) {
 
 // ── sidebar ───────────────────────────────────────────────────────────────────
 const NAV_ITEMS = [
-  { id: 'ledger',         label: 'Live Ledger',    icon: '▤' },
-  { id: 'sessions',       label: 'Sessions',       icon: '◈' },
-  { id: 'reconciliation', label: 'Reconciliation', icon: '⇌' },
-  { id: 'settings',       label: 'Settings',       icon: '⚙' },
+  { id: 'ledger',         label: 'LIVE_LEDGER' },
+  { id: 'sessions',       label: 'SESSIONS' },
+  { id: 'reconciliation', label: 'RECONCILIATION' },
+  { id: 'alerts',         label: 'ALERTS' },
+  { id: 'help',           label: 'HELP' },
+  { id: 'settings',       label: 'SETTINGS' },
 ]
 
 function Sidebar({ view, setView, proxyOnline, onReport }) {
@@ -140,17 +155,19 @@ function Sidebar({ view, setView, proxyOnline, onReport }) {
     }}>
       {/* wordmark */}
       <div style={{ padding: '20px 18px 16px', borderBottom: `1px solid ${BORDER}` }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+        <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: TEXT, marginBottom: 3 }}>
+          RECEIPTS
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <Dot color={proxyOnline ? GREEN : RED} />
-          <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 500, letterSpacing: '0.08em', color: TEXT }}>
-            RECEIPTS
+          <span style={{ fontFamily: MONO, fontSize: 9, color: proxyOnline ? GREEN : RED, letterSpacing: '0.1em' }}>
+            {proxyOnline ? 'ONLINE' : 'OFFLINE'}
           </span>
         </div>
-        <div style={{ fontFamily: MONO, fontSize: 10, color: DIM, paddingLeft: 14 }}>v1.0.0-stable</div>
       </div>
 
       {/* nav */}
-      <nav style={{ flex: 1, padding: '12px 0' }}>
+      <nav style={{ flex: 1, padding: '10px 0' }}>
         {NAV_ITEMS.map(item => (
           <button
             key={item.id}
@@ -158,21 +175,20 @@ function Sidebar({ view, setView, proxyOnline, onReport }) {
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: 10,
               width: '100%',
-              padding: '9px 18px',
+              padding: '8px 18px',
               background: view === item.id ? SURF2 : 'transparent',
               border: 'none',
               borderLeft: view === item.id ? `2px solid ${BLUE}` : '2px solid transparent',
-              color: view === item.id ? TEXT : MUTED,
-              fontFamily: SANS,
-              fontSize: 13,
+              color: view === item.id ? TEXT : DIM,
+              fontFamily: MONO,
+              fontSize: 11,
+              letterSpacing: '0.06em',
               cursor: 'pointer',
               textAlign: 'left',
               transition: 'background 0.15s, color 0.15s',
             }}
           >
-            <span style={{ fontFamily: MONO, fontSize: 12, opacity: 0.7 }}>{item.icon}</span>
             {item.label}
           </button>
         ))}
@@ -184,20 +200,21 @@ function Sidebar({ view, setView, proxyOnline, onReport }) {
           onClick={onReport}
           style={{
             width: '100%',
-            padding: '8px 12px',
+            padding: '7px 12px',
             background: 'transparent',
             border: `1px solid ${BORDER2}`,
-            borderRadius: 4,
-            color: MUTED,
+            borderRadius: 2,
+            color: DIM,
             fontFamily: MONO,
-            fontSize: 11,
+            fontSize: 10,
+            letterSpacing: '0.1em',
             cursor: 'pointer',
             transition: 'border-color 0.15s, color 0.15s',
           }}
           onMouseEnter={e => { e.currentTarget.style.borderColor = BLUE; e.currentTarget.style.color = TEXT }}
-          onMouseLeave={e => { e.currentTarget.style.borderColor = BORDER2; e.currentTarget.style.color = MUTED }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = BORDER2; e.currentTarget.style.color = DIM }}
         >
-          Generate Report
+          GEN_REPORT
         </button>
       </div>
     </aside>
@@ -206,10 +223,12 @@ function Sidebar({ view, setView, proxyOnline, onReport }) {
 
 // ── header bar ────────────────────────────────────────────────────────────────
 const VIEW_TITLES = {
-  ledger:         'Live Ledger',
-  sessions:       'Sessions',
-  reconciliation: 'Reconciliation',
-  settings:       'Settings',
+  ledger:         'LIVE_LEDGER_STREAM',
+  sessions:       'SESSION_REGISTRY',
+  reconciliation: 'RECONCILIATION_INTERFACE',
+  alerts:         'ALERT_RULES',
+  help:           'HELP_DOCS',
+  settings:       'CONFIG_SYS',
 }
 
 function Header({ view, proxyOnline }) {
@@ -226,19 +245,22 @@ function Header({ view, proxyOnline }) {
       top: 0, left: 220, right: 0,
       zIndex: 10,
     }}>
-      <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: 500, color: TEXT }}>
+      <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', color: TEXT }}>
         {VIEW_TITLES[view]}
       </span>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        {view === 'ledger' && (
+          <StatusPill color={BLUE} label="ENGINE: ACTIVE" />
+        )}
         {proxyOnline ? (
           <>
-            <StatusPill color={GREEN} label="Proxy Active" />
-            <StatusPill color={GREEN} label="Secret Loaded" />
+            <StatusPill color={GREEN} label="PROXY: ONLINE" />
+            <StatusPill color={GREEN} label="SEC_LAYER: ARMED" />
           </>
         ) : (
           <>
-            <StatusPill color={RED} label="Proxy Offline" />
-            <StatusPill color={DIM} label="Secret Unknown" dim />
+            <StatusPill color={RED} label="PROXY: OFFLINE" />
+            <StatusPill color={DIM} label="SEC_LAYER: UNKNOWN" dim />
           </>
         )}
       </div>
@@ -251,12 +273,13 @@ function StatusPill({ color, label, dim }) {
     <span style={{
       display: 'inline-flex',
       alignItems: 'center',
-      gap: 6,
-      padding: '3px 10px',
-      border: `1px solid ${dim ? BORDER : color + '33'}`,
-      borderRadius: 3,
-      fontSize: 11,
+      gap: 5,
+      padding: '2px 8px',
+      border: `1px solid ${dim ? BORDER : color + '44'}`,
+      borderRadius: 2,
+      fontSize: 10,
       fontFamily: MONO,
+      letterSpacing: '0.07em',
       color: dim ? DIM : color,
       opacity: dim ? 0.6 : 1,
     }}>
@@ -285,7 +308,7 @@ function Toast({ message, onDone }) {
         padding: '10px 16px',
         background: SURF2,
         border: `1px solid ${GREEN}`,
-        borderRadius: 4,
+        borderRadius: 2,
         color: GREEN,
         fontFamily: MONO,
         fontSize: 12,
@@ -326,33 +349,41 @@ function OfflineBanner({ onDismiss }) {
 
 // ── live ledger view ──────────────────────────────────────────────────────────
 function StatCard({ label, value, color, warn }) {
+  const displayed = String(Math.max(0, value)).padStart(5, '0')
   return (
     <div style={{
       flex: 1,
-      padding: '16px 20px',
+      padding: '14px 18px',
       background: SURF,
       border: `1px solid ${BORDER}`,
-      borderRadius: 4,
+      borderRadius: 2,
     }}>
       <div style={{
         fontFamily: MONO,
-        fontSize: 28,
-        fontWeight: 500,
+        fontSize: 30,
+        fontWeight: 700,
         color: color || TEXT,
         lineHeight: 1,
-        marginBottom: 6,
+        marginBottom: 8,
         display: 'flex',
         alignItems: 'center',
         gap: 8,
+        letterSpacing: '0.04em',
       }}>
-        {value}
+        {displayed}
         {warn && value > 0 && (
-          <span style={{ fontSize: 14, color: RED }}>!</span>
+          <span style={{ fontSize: 13, color: RED, fontWeight: 700 }}>!</span>
         )}
       </div>
-      <div style={{ fontFamily: SANS, fontSize: 11, color: MUTED, letterSpacing: '0.04em' }}>{label}</div>
+      <div style={{ fontFamily: MONO, fontSize: 9, color: DIM, letterSpacing: '0.12em', textTransform: 'uppercase' }}>{label}</div>
     </div>
   )
+}
+
+function verdictLabel(v) {
+  if (v === 'VERIFIED') return 'PASS'
+  if (v === 'UNVERIFIED') return 'FAIL'
+  return v // TAMPERED, CONTRADICTED
 }
 
 function LedgerRow({ r, expanded, onToggle, isNew, showFullHashes, onReconcile, sessionPill }) {
@@ -363,6 +394,7 @@ function LedgerRow({ r, expanded, onToggle, isNew, showFullHashes, onReconcile, 
     r.verdict === 'UNVERIFIED'   ? RED   : BORDER2
 
   const rowBg = r.verdict === 'TAMPERED' ? 'rgba(239,68,68,0.04)' : 'transparent'
+  const reqId = 'REQ_' + r.session_id.slice(0, 6).toUpperCase()
 
   return (
     <>
@@ -371,7 +403,7 @@ function LedgerRow({ r, expanded, onToggle, isNew, showFullHashes, onReconcile, 
         onClick={onToggle}
         style={{
           display: 'grid',
-          gridTemplateColumns: '110px 130px 110px 140px 80px 110px',
+          gridTemplateColumns: '110px 110px 110px 160px 110px',
           gap: 12,
           padding: '10px 16px',
           borderBottom: `1px solid ${BORDER}`,
@@ -387,8 +419,8 @@ function LedgerRow({ r, expanded, onToggle, isNew, showFullHashes, onReconcile, 
       >
         <span style={{ fontFamily: MONO, color: MUTED, fontSize: 11 }}>{fmtTs(r.timestamp)}</span>
         <span style={{ fontFamily: MONO, color: MUTED, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 5 }}>
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {showFullHashes ? r.session_id : r.session_id.slice(0, 8) + '...'}
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }} title={r.session_id}>
+            {showFullHashes ? r.session_id : reqId}
           </span>
           {sessionPill && (
             <span style={{ display: 'flex', flexDirection: 'column', gap: 1, flexShrink: 0 }}>
@@ -415,17 +447,14 @@ function LedgerRow({ r, expanded, onToggle, isNew, showFullHashes, onReconcile, 
             </span>
           )}
         </span>
-        <span style={{ fontFamily: MONO, color: TEXT }}>{r.tool_name}</span>
+        <span style={{ fontFamily: MONO, color: TEXT, fontSize: 11 }}>{r.tool_name}</span>
         <span style={{ fontFamily: MONO, color: MUTED, fontSize: 11 }}>
           {showFullHashes ? r.input_hash : truncHex(r.input_hash)}
         </span>
         <span>
-          <Pill color={r.status === 'success' ? GREEN : RED}>{r.status}</Pill>
-        </span>
-        <span>
           {r.verdict
-            ? <Pill color={verdictColor(r.verdict)} bg={r.verdict === 'TAMPERED' ? 'rgba(245,158,11,0.08)' : undefined}>{r.verdict}</Pill>
-            : <span style={{ fontFamily: MONO, fontSize: 11, color: DIM, padding: '2px 7px' }}>PENDING</span>
+            ? <Pill color={verdictColor(r.verdict)}>{verdictLabel(r.verdict)}</Pill>
+            : <span style={{ fontFamily: MONO, fontSize: 11, color: DIM, padding: '2px 7px', letterSpacing: '0.05em' }}>PENDING</span>
           }
         </span>
       </div>
@@ -477,20 +506,21 @@ function LedgerRow({ r, expanded, onToggle, isNew, showFullHashes, onReconcile, 
               <button
                 onClick={e => { e.stopPropagation(); onReconcile?.(r.session_id) }}
                 style={{
-                  padding: '5px 12px',
+                  padding: '4px 12px',
                   background: 'transparent',
                   border: `1px solid ${BORDER2}`,
-                  borderRadius: 3,
-                  color: MUTED,
+                  borderRadius: 2,
+                  color: DIM,
                   fontFamily: MONO,
-                  fontSize: 11,
+                  fontSize: 10,
+                  letterSpacing: '0.08em',
                   cursor: 'pointer',
                   transition: 'border-color 0.15s, color 0.15s',
                 }}
                 onMouseEnter={e => { e.currentTarget.style.borderColor = BLUE; e.currentTarget.style.color = TEXT }}
-                onMouseLeave={e => { e.currentTarget.style.borderColor = BORDER2; e.currentTarget.style.color = MUTED }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = BORDER2; e.currentTarget.style.color = DIM }}
               >
-                Reconcile this session →
+                VALIDATE_SESSION
               </button>
             </div>
           </div>
@@ -544,9 +574,9 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
   const refresh = useCallback(async () => {
     try {
       const [sr, rr, sessions] = await Promise.all([
-        fetch('/stats').then(r => r.ok ? r.json() : null),
-        fetch('/receipts/all').then(r => r.ok ? r.json() : null),
-        fetch('/sessions').then(r => r.ok ? r.json() : null),
+        apiFetch('/stats').then(r => r.ok ? r.json() : null),
+        apiFetch('/receipts/all').then(r => r.ok ? r.json() : null),
+        apiFetch('/sessions').then(r => r.ok ? r.json() : null),
       ])
       setOffline(false)
 
@@ -621,6 +651,11 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
   })
 
   const pendingSessions = stats.sessions - stats.verified_sessions - stats.open_sessions
+  const [page, setPage] = useState(0)
+  const PAGE_SIZE = 20
+
+  // Reset to page 0 whenever filters change
+  useEffect(() => { setPage(0) }, [search, verdictFilter, timeFilter])
 
   return (
     <div>
@@ -630,10 +665,9 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
 
       {/* receipt stats row */}
       <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-        <StatCard label="Total Receipts"  value={displayStats.total_receipts} />
-        <StatCard label="Verified Claims" value={displayStats.verified}          color={GREEN} />
-        <StatCard label="Successful Calls" value={displayStats.successful_calls} color={BLUE}  />
-        <StatCard label="Tamper Alerts"   value={displayStats.tamper_alerts}     color={RED}   warn />
+        <StatCard label="TOTAL_RECEIPTS"  value={displayStats.total_receipts} />
+        <StatCard label="VERIFIED_CLAIMS" value={displayStats.verified}          color={GREEN} />
+        <StatCard label="TAMPER_ALERTS"   value={displayStats.tamper_alerts}     color={RED}   warn />
       </div>
 
       {/* session stats row */}
@@ -645,7 +679,7 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
         ].map(({ label, value, color }) => (
           <div key={label} style={{
             flex: 1, padding: '10px 14px',
-            background: SURF, border: `1px solid ${BORDER}`, borderRadius: 4,
+            background: SURF, border: `1px solid ${BORDER}`, borderRadius: 2,
             display: 'flex', alignItems: 'center', gap: 10,
           }}>
             <Dot color={color} />
@@ -705,11 +739,11 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
       </div>
 
       {/* table */}
-      <div style={{ border: `1px solid ${BORDER}`, borderRadius: 4, overflow: 'hidden' }}>
+      <div style={{ border: `1px solid ${BORDER}`, borderRadius: 2, overflow: 'hidden' }}>
         {/* header */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: '110px 130px 110px 140px 80px 110px',
+          gridTemplateColumns: '110px 110px 110px 160px 110px',
           gap: 12,
           padding: '8px 16px',
           background: SURF2,
@@ -721,10 +755,9 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
           borderLeft: '2px solid transparent',
         }}>
           <span>TIMESTAMP</span>
-          <span>SESSION ID</span>
-          <span>TOOL NAME</span>
-          <span>INPUT HASH</span>
-          <span>STATUS</span>
+          <span>REQUEST_ID</span>
+          <span>TOOL</span>
+          <span>INPUT_HASH</span>
           <span>VERDICT</span>
         </div>
 
@@ -741,7 +774,7 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
               : 'No receipts match the current filters.'}
           </div>
         ) : (
-          filtered.map(r => (
+          filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map(r => (
             <LedgerRow
               key={r.id}
               r={r}
@@ -753,6 +786,49 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
               sessionPill={sessionPillProps(sessionsMap[r.session_id])}
             />
           ))
+        )}
+
+        {/* table footer */}
+        {filtered.length > 0 && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '7px 16px',
+            background: SURF2,
+            borderTop: `1px solid ${BORDER}`,
+            fontFamily: MONO, fontSize: 10, color: DIM,
+          }}>
+            <span>
+              SHOWING {Math.min(page * PAGE_SIZE + 1, filtered.length)}–{Math.min((page + 1) * PAGE_SIZE, filtered.length)} OF {filtered.length} RECORDS
+            </span>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button
+                onClick={() => setPage(p => Math.max(0, p - 1))}
+                disabled={page === 0}
+                style={{
+                  padding: '2px 10px', background: 'transparent',
+                  border: `1px solid ${page === 0 ? BORDER : BORDER2}`,
+                  borderRadius: 2, color: page === 0 ? DIM : MUTED,
+                  fontFamily: MONO, fontSize: 10, cursor: page === 0 ? 'default' : 'pointer',
+                  letterSpacing: '0.06em',
+                }}
+              >
+                PREV
+              </button>
+              <button
+                onClick={() => setPage(p => p + 1)}
+                disabled={(page + 1) * PAGE_SIZE >= filtered.length}
+                style={{
+                  padding: '2px 10px', background: 'transparent',
+                  border: `1px solid ${(page + 1) * PAGE_SIZE >= filtered.length ? BORDER : BORDER2}`,
+                  borderRadius: 2, color: (page + 1) * PAGE_SIZE >= filtered.length ? DIM : MUTED,
+                  fontFamily: MONO, fontSize: 10, cursor: (page + 1) * PAGE_SIZE >= filtered.length ? 'default' : 'pointer',
+                  letterSpacing: '0.06em',
+                }}
+              >
+                NEXT
+              </button>
+            </div>
+          </div>
         )}
       </div>
     </div>
@@ -793,7 +869,7 @@ function SessionsView({ onReconcile }) {
     let active = true
     async function load() {
       try {
-        const data = await fetch('/sessions').then(r => r.json())
+        const data = await apiFetch('/sessions').then(r => r.json())
         if (active) { setSessions(data); setLoading(false) }
       } catch { if (active) setLoading(false) }
     }
@@ -802,22 +878,23 @@ function SessionsView({ onReconcile }) {
     return () => { active = false; clearInterval(t) }
   }, [])
 
-  const COL = '1fr 120px 80px 60px 100px 140px'
+  const COL = '1fr 120px 80px 60px 100px 110px 100px'
 
   return (
     <div>
-      <div style={{ border: `1px solid ${BORDER}`, borderRadius: 4, overflow: 'hidden' }}>
+      <div style={{ border: `1px solid ${BORDER}`, borderRadius: 2, overflow: 'hidden' }}>
         {/* header */}
         <div style={{
           display: 'grid', gridTemplateColumns: COL, gap: 12,
           padding: '8px 16px', background: SURF2, borderBottom: `1px solid ${BORDER}`,
           fontSize: 10, fontFamily: MONO, color: DIM, letterSpacing: '0.1em',
         }}>
-          <span>SESSION ID</span>
+          <span>SESSION_ID</span>
           <span>STARTED</span>
           <span>DURATION</span>
-          <span>RECEIPTS</span>
+          <span>RX</span>
           <span>STATUS</span>
+          <span>SCOPE</span>
           <span>VERDICT</span>
         </div>
 
@@ -830,48 +907,49 @@ function SessionsView({ onReconcile }) {
             No sessions yet. Run a demo or make a tool call.
           </div>
         ) : (
-          sessions.map(s => (
-            <div
-              key={s.session_id}
-              onClick={() => onReconcile?.(s.session_id)}
-              style={{
-                display: 'grid', gridTemplateColumns: COL, gap: 12,
-                padding: '10px 16px', borderBottom: `1px solid ${BORDER}`,
-                cursor: 'pointer', fontSize: 12, alignItems: 'center',
-                transition: 'background 0.15s',
-              }}
-              onMouseEnter={e => { e.currentTarget.style.background = SURF2 }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
-            >
-              <span style={{ fontFamily: MONO, fontSize: 11, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {s.session_id}
-              </span>
-              <span style={{ fontFamily: MONO, fontSize: 11, color: MUTED }}>{fmtTs(s.created_at)}</span>
-              <span style={{ fontFamily: MONO, fontSize: 11, color: MUTED }}>{fmtDuration(s.created_at, s.closed_at)}</span>
-              <span style={{ fontFamily: MONO, fontSize: 11, color: TEXT }}>{s.receipt_count}</span>
-              <span><SessionStatusPill session={s} /></span>
-              <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                {s.auto_verdict
-                  ? <>
-                      <Pill color={verdictColor(s.auto_verdict)} bg={s.auto_verdict === 'TAMPERED' ? 'rgba(245,158,11,0.08)' : undefined}>{s.auto_verdict}</Pill>
-                      {s.verification_scope === 'signature_only' && (
-                        <span
-                          title="Cryptographic integrity verified. Run manual reconciliation to verify agent claims."
-                          style={{ fontFamily: MONO, fontSize: 9, color: DIM, letterSpacing: '0.04em', cursor: 'help' }}
-                        >
-                          sig. only
-                        </span>
-                      )}
-                    </>
-                  : <span style={{ fontFamily: MONO, fontSize: 11, color: DIM }}>—</span>
-                }
-              </span>
-            </div>
-          ))
+          sessions.map(s => {
+            const scopeLabel = s.verification_scope === 'signature_only' ? 'SIG_ONLY'
+              : s.verification_scope === 'full_claim' ? 'FULL_CLAIM' : null
+            const scopeColor = s.verification_scope === 'full_claim' ? BLUE : DIM
+            return (
+              <div
+                key={s.session_id}
+                onClick={() => onReconcile?.(s.session_id)}
+                style={{
+                  display: 'grid', gridTemplateColumns: COL, gap: 12,
+                  padding: '10px 16px', borderBottom: `1px solid ${BORDER}`,
+                  cursor: 'pointer', fontSize: 12, alignItems: 'center',
+                  transition: 'background 0.15s',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = SURF2 }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
+              >
+                <span style={{ fontFamily: MONO, fontSize: 11, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.session_id}>
+                  {s.session_id}
+                </span>
+                <span style={{ fontFamily: MONO, fontSize: 11, color: MUTED }}>{fmtTs(s.created_at)}</span>
+                <span style={{ fontFamily: MONO, fontSize: 11, color: MUTED }}>{fmtDuration(s.created_at, s.closed_at)}</span>
+                <span style={{ fontFamily: MONO, fontSize: 11, color: TEXT }}>{s.receipt_count}</span>
+                <span><SessionStatusPill session={s} /></span>
+                <span>
+                  {scopeLabel
+                    ? <Pill color={scopeColor}>{scopeLabel}</Pill>
+                    : <span style={{ fontFamily: MONO, fontSize: 11, color: DIM }}>—</span>
+                  }
+                </span>
+                <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {s.auto_verdict
+                    ? <Pill color={verdictColor(s.auto_verdict)}>{verdictLabel(s.auto_verdict)}</Pill>
+                    : <span style={{ fontFamily: MONO, fontSize: 11, color: DIM }}>—</span>
+                  }
+                </span>
+              </div>
+            )
+          })
         )}
       </div>
-      <div style={{ marginTop: 10, fontFamily: MONO, fontSize: 11, color: DIM }}>
-        Click any row to reconcile that session.
+      <div style={{ marginTop: 8, fontFamily: MONO, fontSize: 10, color: DIM, letterSpacing: '0.06em' }}>
+        CLICK ANY ROW TO OPEN RECONCILIATION
       </div>
     </div>
   )
@@ -880,24 +958,24 @@ function SessionsView({ onReconcile }) {
 // ── reconciliation view ───────────────────────────────────────────────────────
 function ReconcileVerdictBanner({ verdict }) {
   const cfg = {
-    VERIFIED:     { color: GREEN, bg: 'rgba(34,197,94,0.08)',   border: 'rgba(34,197,94,0.2)',   left: GREEN, text: 'All claims match cryptographic receipts.' },
-    UNVERIFIED:   { color: RED,   bg: 'rgba(239,68,68,0.08)',   border: 'rgba(239,68,68,0.2)',   left: RED,   text: 'No receipts found for this session. Agent made claims without executing tools.' },
-    CONTRADICTED: { color: AMBER, bg: 'rgba(245,158,11,0.08)',  border: 'rgba(245,158,11,0.2)',  left: AMBER, text: 'Agent claimed different outputs than what was recorded. See breakdown below.' },
-    TAMPERED:     { color: RED,   bg: 'rgba(239,68,68,0.08)',   border: 'rgba(245,158,11,0.2)',  left: RED,   text: 'Receipt signature invalid. Record was modified after execution.' },
+    VERIFIED:     { color: GREEN, bg: 'rgba(34,197,94,0.06)',   border: 'rgba(34,197,94,0.2)',   left: GREEN, text: 'ALL CLAIMS MATCH CRYPTOGRAPHIC RECEIPTS' },
+    UNVERIFIED:   { color: RED,   bg: 'rgba(239,68,68,0.06)',   border: 'rgba(239,68,68,0.2)',   left: RED,   text: 'NO RECEIPTS FOUND — AGENT MADE CLAIMS WITHOUT EXECUTING TOOLS' },
+    CONTRADICTED: { color: AMBER, bg: 'rgba(245,158,11,0.06)',  border: 'rgba(245,158,11,0.2)',  left: AMBER, text: 'CLAIM MISMATCH — AGENT REPORTED OUTPUTS THAT DIFFER FROM LEDGER' },
+    TAMPERED:     { color: RED,   bg: 'rgba(239,68,68,0.06)',   border: 'rgba(239,68,68,0.2)',   left: RED,   text: 'SIGNATURE INVALID — RECEIPT WAS MODIFIED AFTER EXECUTION' },
   }
   const s = cfg[verdict] ?? cfg.UNVERIFIED
   return (
     <div className="pill-animate" style={{
-      padding: '14px 16px',
+      padding: '12px 16px',
       background: s.bg,
       border: `1px solid ${s.border}`,
       borderLeft: `3px solid ${s.left}`,
-      borderRadius: 4,
+      borderRadius: 2,
     }}>
-      <div style={{ fontFamily: MONO, fontSize: 14, fontWeight: 700, color: s.color, letterSpacing: '0.06em', marginBottom: 4 }}>
-        {verdict}
+      <div style={{ fontFamily: MONO, fontSize: 13, fontWeight: 700, color: s.color, letterSpacing: '0.08em', marginBottom: 4 }}>
+        STATE: {verdict}
       </div>
-      <div style={{ fontFamily: SANS, fontSize: 12, color: MUTED }}>{s.text}</div>
+      <div style={{ fontFamily: MONO, fontSize: 10, color: s.color, opacity: 0.7, letterSpacing: '0.06em' }}>{s.text}</div>
     </div>
   )
 }
@@ -916,7 +994,7 @@ function ReceiptCard({ receipt: r, verdict: v }) {
   ]
 
   return (
-    <div style={{ border: `1px solid ${BORDER}`, borderRadius: 4, overflow: 'hidden' }}>
+    <div style={{ border: `1px solid ${BORDER}`, borderRadius: 2, overflow: 'hidden' }}>
       {/* card header */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 12,
@@ -937,7 +1015,7 @@ function ReceiptCard({ receipt: r, verdict: v }) {
         borderBottom: `1px solid ${BORDER}`,
         fontSize: 10, fontFamily: MONO, color: DIM, letterSpacing: '0.1em',
       }}>
-        <span>FIELD</span><span>ACTUAL</span><span style={{ textAlign: 'center' }}>MATCH</span>
+        <span>FIELD</span><span>LEDGER</span><span style={{ textAlign: 'center' }}>STAT</span>
       </div>
 
       {/* rows */}
@@ -949,9 +1027,11 @@ function ReceiptCard({ receipt: r, verdict: v }) {
           background: !row.match ? 'rgba(239,68,68,0.05)' : i % 2 === 1 ? SURF2 : 'transparent',
           fontSize: 11, fontFamily: MONO, alignItems: 'center',
         }}>
-          <span style={{ color: MUTED }}>{row.field}</span>
+          <span style={{ color: DIM, letterSpacing: '0.06em', fontSize: 10 }}>{row.field}</span>
           <span style={{ color: row.color ?? TEXT, wordBreak: 'break-all' }}>{row.actual}</span>
-          <span style={{ textAlign: 'center', color: row.match ? GREEN : RED, fontSize: 13 }}>{row.match ? '✓' : '✗'}</span>
+          <span style={{ textAlign: 'center', fontFamily: MONO, fontSize: 10, letterSpacing: '0.06em', color: row.match ? GREEN : RED }}>
+            {row.match ? 'OK' : 'FAIL'}
+          </span>
         </div>
       ))}
     </div>
@@ -970,7 +1050,7 @@ function ReconciliationView({ initialSession, onClearInitial }) {
 
   // Populate sessions dropdown from /sessions (includes auto_verdict + verification_scope)
   useEffect(() => {
-    fetch('/sessions')
+    apiFetch('/sessions')
       .then(r => r.json())
       .then(data => setSessions(data))
       .catch(() => {})
@@ -1030,7 +1110,7 @@ function ReconciliationView({ initialSession, onClearInitial }) {
     setError(null)
     setResult(null)
     try {
-      const rr = await fetch(`/receipts/${s.session_id}`).then(r => {
+      const rr = await apiFetch(`/receipts/${s.session_id}`).then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
       })
@@ -1062,7 +1142,7 @@ function ReconciliationView({ initialSession, onClearInitial }) {
     setResult(null)
     try {
       // 1. Fetch all receipts for this session (includes raw tool_output)
-      const rr = await fetch(`/receipts/${sessionId}`).then(r => {
+      const rr = await apiFetch(`/receipts/${sessionId}`).then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()
       })
@@ -1082,7 +1162,7 @@ function ReconciliationView({ initialSession, onClearInitial }) {
       // 3. POST /sessions/{id}/verify-claim — runs full reconciliation and
       //    persists verification_scope='full_claim' on the session row. force=true
       //    overrides the backend's guard against overwriting an existing full_claim verdict.
-      const verRes = await fetch(`/sessions/${sessionId}/verify-claim${force ? '?force=true' : ''}`, {
+      const verRes = await apiFetch(`/sessions/${sessionId}/verify-claim${force ? '?force=true' : ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId, claimed_outputs: claimedOutputs }),
@@ -1148,9 +1228,9 @@ function ReconciliationView({ initialSession, onClearInitial }) {
       <div style={{
         display: 'flex', alignItems: 'center', gap: 10,
         padding: '12px 16px',
-        background: SURF, border: `1px solid ${BORDER}`, borderRadius: 4,
+        background: SURF, border: `1px solid ${BORDER}`, borderRadius: 2,
       }}>
-        <span style={{ fontFamily: MONO, fontSize: 11, color: MUTED, flexShrink: 0 }}>Session</span>
+        <span style={{ fontFamily: MONO, fontSize: 10, color: DIM, letterSpacing: '0.1em', flexShrink: 0 }}>SESSION</span>
         <select
           value={selected}
           onChange={e => setSelected(e.target.value)}
@@ -1169,20 +1249,20 @@ function ReconciliationView({ initialSession, onClearInitial }) {
           onClick={() => runForSession(selected, onRecord)}
           disabled={loading || !selected}
           style={{
-            padding: '7px 16px', flexShrink: 0,
+            padding: '6px 16px', flexShrink: 0,
             background: loading || !selected ? SURF2 : onRecord ? 'transparent' : BLUE,
             border: `1px solid ${loading || !selected ? BORDER : onRecord ? AMBER : BLUE}`,
-            borderRadius: 3,
+            borderRadius: 2,
             color: loading || !selected ? MUTED : onRecord ? AMBER : '#fff',
-            fontFamily: MONO, fontSize: 12,
+            fontFamily: MONO, fontSize: 10, letterSpacing: '0.08em',
             cursor: loading || !selected ? 'not-allowed' : 'pointer',
             display: 'flex', alignItems: 'center', gap: 8,
             transition: 'background 0.15s',
           }}
         >
           {loading
-            ? <><span style={{ display: 'inline-block', animation: 'spin 1s linear infinite' }}>⟳</span>Running...</>
-            : onRecord ? 'Re-run Reconciliation' : 'Run Reconciliation'
+            ? <><span style={{ display: 'inline-block', animation: 'spin 1s linear infinite' }}>⟳</span>RUNNING...</>
+            : onRecord ? 'RE-RUN VALIDATION' : 'RUN VALIDATION'
           }
         </button>
       </div>
@@ -1190,12 +1270,12 @@ function ReconciliationView({ initialSession, onClearInitial }) {
       {/* Re-run warning — shown when a full_claim verdict is already on record */}
       {onRecord && !loading && (
         <div style={{
-          padding: '10px 12px', background: 'rgba(245,158,11,0.06)',
-          border: `1px solid rgba(245,158,11,0.25)`, borderRadius: 3,
-          color: AMBER, fontFamily: SANS, fontSize: 12, lineHeight: 1.5,
+          padding: '8px 12px', background: 'rgba(245,158,11,0.04)',
+          border: `1px solid rgba(245,158,11,0.25)`, borderRadius: 2,
+          color: AMBER, fontFamily: MONO, fontSize: 10, lineHeight: 1.7, letterSpacing: '0.05em',
         }}>
-          This session already has a full claim verdict. Re-running will use stored receipts
-          as the claim source and may not reflect the original agent claim.
+          WARN: SESSION HAS EXISTING FULL_CLAIM VERDICT. RE-RUN USES STORED RECEIPTS AS CLAIM
+          SOURCE AND MAY NOT REFLECT ORIGINAL AGENT OUTPUT.
         </div>
       )}
 
@@ -1215,52 +1295,53 @@ function ReconciliationView({ initialSession, onClearInitial }) {
       {/* Auto-verdict preview — shown when a session with stored verdict is selected but not yet run */}
       {!result && !loading && !error && selectedSession?.auto_verdict && (
         <div style={{
-          padding: '12px 16px', background: SURF, border: `1px solid ${BORDER}`, borderRadius: 4,
+          padding: '12px 16px', background: SURF, border: `1px solid ${BORDER}`, borderRadius: 2,
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Pill color={verdictColor(selectedSession.auto_verdict)}>{selectedSession.auto_verdict}</Pill>
+            <Pill color={verdictColor(selectedSession.auto_verdict)}>{verdictLabel(selectedSession.auto_verdict)}</Pill>
             {selectedSession.verification_scope === 'signature_only' && (
               <span style={{
-                fontFamily: MONO, fontSize: 10, color: DIM,
+                fontFamily: MONO, fontSize: 9, color: DIM,
                 padding: '1px 6px', border: `1px solid ${BORDER2}`, borderRadius: 2,
+                letterSpacing: '0.08em',
               }}>
-                sig. only
+                SIG_ONLY
               </span>
             )}
-            <span style={{ fontFamily: SANS, fontSize: 12, color: MUTED }}>
+            <span style={{ fontFamily: MONO, fontSize: 10, color: DIM, letterSpacing: '0.05em' }}>
               {selectedSession.verification_scope === 'signature_only'
-                ? 'Signatures intact — agent claim not yet checked.'
-                : 'Auto-verified'}{' '}
+                ? 'SIGNATURES_OK — AGENT CLAIM NOT YET CHECKED'
+                : 'AUTO_VERIFIED'}{' '}
               {selectedSession.auto_verified_at
-                ? `${Math.round((Date.now() - new Date(selectedSession.auto_verified_at)) / 1000)}s ago`
+                ? `· ${Math.round((Date.now() - new Date(selectedSession.auto_verified_at)) / 1000)}s ago`
                 : ''}
             </span>
           </div>
-          <span style={{ fontFamily: MONO, fontSize: 11, color: DIM }}>
+          <span style={{ fontFamily: MONO, fontSize: 10, color: DIM, letterSpacing: '0.05em' }}>
             {selectedSession.verification_scope === 'signature_only'
-              ? 'Run Reconciliation to check agent claims.'
-              : 'Click Run Reconciliation to re-run.'}
+              ? 'RUN VALIDATION TO CHECK AGENT CLAIMS'
+              : 'RUN VALIDATION TO RE-RUN'}
           </span>
         </div>
       )}
 
       {!result && !loading && !error && !selectedSession?.auto_verdict && (
         <div style={{
-          padding: '72px 0', textAlign: 'center',
-          border: `1px solid ${BORDER}`, borderRadius: 4, background: SURF,
+          padding: '64px 0', textAlign: 'center',
+          border: `1px solid ${BORDER}`, borderRadius: 2, background: SURF,
         }}>
-          <div style={{ fontFamily: MONO, fontSize: 13, color: MUTED, marginBottom: 8 }}>
-            Select a session above to run reconciliation.
+          <div style={{ fontFamily: MONO, fontSize: 11, color: DIM, marginBottom: 6, letterSpacing: '0.08em' }}>
+            SELECT A SESSION TO RUN VALIDATION
           </div>
-          <div style={{ fontFamily: SANS, fontSize: 12, color: DIM }}>
-            Receipts will verify each tool call cryptographically.
+          <div style={{ fontFamily: MONO, fontSize: 10, color: DIM, opacity: 0.6 }}>
+            EACH TOOL CALL WILL BE VERIFIED CRYPTOGRAPHICALLY
           </div>
         </div>
       )}
 
       {loading && (
-        <div style={{ border: `1px solid ${BORDER}`, borderRadius: 4, overflow: 'hidden' }}>
+        <div style={{ border: `1px solid ${BORDER}`, borderRadius: 2, overflow: 'hidden' }}>
           {[0, 1, 2].map(i => (
             <div key={i} className="skeleton-row" style={{
               height: 56,
@@ -1277,14 +1358,14 @@ function ReconciliationView({ initialSession, onClearInitial }) {
           {onRecord && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{
-                fontFamily: MONO, fontSize: 10, color: AMBER,
+                fontFamily: MONO, fontSize: 9, color: AMBER,
                 padding: '2px 7px', border: `1px solid rgba(245,158,11,0.35)`, borderRadius: 2,
-                letterSpacing: '0.04em',
+                letterSpacing: '0.1em',
               }}>
-                ON RECORD
+                ON_RECORD
               </span>
-              <span style={{ fontFamily: SANS, fontSize: 12, color: MUTED }}>
-                Full claim verification on record
+              <span style={{ fontFamily: MONO, fontSize: 10, color: DIM, letterSpacing: '0.05em' }}>
+                FULL_CLAIM VERIFICATION ON RECORD
                 {result.generated_at ? ` · ${new Date(result.generated_at).toLocaleString()}` : ''}
               </span>
             </div>
@@ -1297,7 +1378,7 @@ function ReconciliationView({ initialSession, onClearInitial }) {
           {result.receipts.length === 0 ? (
             <div style={{
               padding: '32px', textAlign: 'center',
-              border: `1px solid ${BORDER}`, borderRadius: 4,
+              border: `1px solid ${BORDER}`, borderRadius: 2,
               fontFamily: MONO, fontSize: 12, color: MUTED,
             }}>
               No tool executions recorded for this session.
@@ -1311,25 +1392,25 @@ function ReconciliationView({ initialSession, onClearInitial }) {
           {/* Part C: Session summary footer */}
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '10px 14px', gap: 12, flexWrap: 'wrap',
-            background: SURF, border: `1px solid ${BORDER}`, borderRadius: 4,
+            padding: '9px 14px', gap: 12, flexWrap: 'wrap',
+            background: SURF2, border: `1px solid ${BORDER}`, borderRadius: 2,
           }}>
-            <div style={{ display: 'flex', gap: 20, fontFamily: MONO, fontSize: 11, color: MUTED, flexWrap: 'wrap' }}>
-              <span>Session: {result.session_id}</span>
-              <span>{result.receipts.length} receipt{result.receipts.length !== 1 ? 's' : ''} verified</span>
-              <span>Generated: {new Date(result.generated_at).toLocaleTimeString()}</span>
+            <div style={{ display: 'flex', gap: 20, fontFamily: MONO, fontSize: 10, color: DIM, flexWrap: 'wrap', letterSpacing: '0.06em' }}>
+              <span>SESSION: {result.session_id.slice(0, 16)}...</span>
+              <span>RX_COUNT: {result.receipts.length}</span>
+              <span>GENERATED: {new Date(result.generated_at).toLocaleTimeString()}</span>
             </div>
             <button
               onClick={copyResult}
               style={{
-                padding: '5px 12px', background: 'transparent',
-                border: `1px solid ${BORDER2}`, borderRadius: 3,
-                color: copied ? GREEN : MUTED,
-                fontFamily: MONO, fontSize: 11, cursor: 'pointer', flexShrink: 0,
+                padding: '3px 10px', background: 'transparent',
+                border: `1px solid ${BORDER2}`, borderRadius: 2,
+                color: copied ? GREEN : DIM,
+                fontFamily: MONO, fontSize: 10, letterSpacing: '0.08em', cursor: 'pointer', flexShrink: 0,
                 transition: 'color 0.15s',
               }}
             >
-              {copied ? 'Copied' : 'Copy JSON'}
+              {copied ? 'COPIED' : 'EXPORT_JSON'}
             </button>
           </div>
         </div>
@@ -1338,31 +1419,711 @@ function ReconciliationView({ initialSession, onClearInitial }) {
   )
 }
 
+// ── alerts view ───────────────────────────────────────────────────────────────
+const TRIGGER_COLORS = {
+  CONTRADICTED: 'var(--amber)',
+  TAMPERED:     'var(--red)',
+  UNVERIFIED:   'var(--red)',
+  ANY:          'var(--blue)',
+}
+
+const CHANNEL_LABELS = { webhook: 'Webhook', email: 'Email', slack: 'Slack' }
+
+function AlertRuleCard({ rule, onToggle, onTest, onDelete }) {
+  const [testState, setTestState] = useState(null) // null | 'sending' | 'sent' | 'failed'
+
+  async function handleTest() {
+    setTestState('sending')
+    try {
+      const res = await apiFetch(`/alerts/${rule.id}/test`, { method: 'POST' })
+      setTestState(res.ok ? 'sent' : 'failed')
+    } catch {
+      setTestState('failed')
+    }
+    setTimeout(() => setTestState(null), 2000)
+  }
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 12,
+      padding: '12px 16px',
+      background: SURF,
+      border: `1px solid ${BORDER}`,
+      borderRadius: 2,
+    }}>
+      {/* name */}
+      <span style={{ flex: 1, fontFamily: SANS, fontSize: 13, fontWeight: 500, color: TEXT }}>
+        {rule.name}
+      </span>
+
+      {/* trigger badge */}
+      <Pill color={TRIGGER_COLORS[rule.trigger] ?? MUTED}>
+        ON: {rule.trigger}
+      </Pill>
+
+      {/* channel badge */}
+      <Pill color={BLUE}>{(CHANNEL_LABELS[rule.channel] ?? rule.channel).toUpperCase()}</Pill>
+
+      {/* enabled toggle */}
+      <label style={{ position: 'relative', display: 'inline-block', width: 36, height: 18, cursor: 'pointer', flexShrink: 0 }}>
+        <input
+          type="checkbox"
+          checked={rule.enabled}
+          onChange={() => onToggle(rule)}
+          style={{ opacity: 0, width: 0, height: 0 }}
+        />
+        <span style={{
+          position: 'absolute', inset: 0, borderRadius: 9,
+          background: rule.enabled ? BLUE : BORDER2,
+          transition: 'background 0.2s',
+          border: `1px solid ${rule.enabled ? BLUE : BORDER}`,
+        }} />
+        <span style={{
+          position: 'absolute', top: '50%', transform: 'translateY(-50%)',
+          left: rule.enabled ? 20 : 2, width: 14, height: 14,
+          borderRadius: '50%', background: '#fff', transition: 'left 150ms ease',
+        }} />
+      </label>
+
+      {/* test button */}
+      <button
+        onClick={handleTest}
+        disabled={testState === 'sending'}
+        style={{
+          padding: '4px 10px', background: 'transparent',
+          border: `1px solid ${testState === 'sent' ? GREEN : testState === 'failed' ? RED : BORDER2}`,
+          borderRadius: 3,
+          color: testState === 'sent' ? GREEN : testState === 'failed' ? RED : MUTED,
+          fontFamily: MONO, fontSize: 11, cursor: testState === 'sending' ? 'wait' : 'pointer',
+          transition: 'border-color 0.15s, color 0.15s',
+          flexShrink: 0,
+        }}
+      >
+        {testState === 'sending' ? '...' : testState === 'sent' ? 'Sent' : testState === 'failed' ? 'Failed' : 'Test'}
+      </button>
+
+      {/* delete */}
+      <button
+        onClick={() => onDelete(rule.id)}
+        style={{
+          padding: '4px 8px', background: 'transparent',
+          border: `1px solid transparent`,
+          borderRadius: 3, color: MUTED, fontFamily: MONO, fontSize: 13,
+          cursor: 'pointer', transition: 'color 0.15s',
+          flexShrink: 0,
+        }}
+        onMouseEnter={e => { e.currentTarget.style.color = RED }}
+        onMouseLeave={e => { e.currentTarget.style.color = MUTED }}
+        title="Delete rule"
+      >
+        ×
+      </button>
+    </div>
+  )
+}
+
+function AlertsView() {
+  const [rules, setRules]           = useState([])
+  const [showForm, setShowForm]     = useState(false)
+  const [step, setStep]             = useState(1) // 1=trigger 2=channel 3=config 4=name
+  const [trigger, setTrigger]       = useState(null)
+  const [channel, setChannel]       = useState(null)
+  const [ruleName, setRuleName]     = useState('')
+  const [sendTest, setSendTest]     = useState(true)
+  const [config, setConfig]         = useState({})
+  const [saving, setSaving]         = useState(false)
+  const [formMsg, setFormMsg]       = useState(null) // {type:'ok'|'err', text}
+
+  useEffect(() => { loadRules() }, [])
+
+  async function loadRules() {
+    try {
+      const data = await apiFetch('/alerts').then(r => r.json())
+      setRules(Array.isArray(data) ? data : [])
+    } catch {}
+  }
+
+  function openForm() {
+    setShowForm(true); setStep(1); setTrigger(null); setChannel(null)
+    setRuleName(''); setConfig({}); setFormMsg(null); setSendTest(true)
+  }
+
+  function closeForm() { setShowForm(false) }
+
+  function autoName(t, c) {
+    if (!t || !c) return ''
+    return `${CHANNEL_LABELS[c] ?? c} on ${t}`
+  }
+
+  function pickTrigger(t) { setTrigger(t); setRuleName(autoName(t, channel)); setStep(2) }
+  function pickChannel(c) { setChannel(c); setRuleName(autoName(trigger, c)); setStep(3) }
+
+  function configField(label, key, placeholder, type = 'text') {
+    return (
+      <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <label style={{ fontFamily: SANS, fontSize: 12, color: MUTED }}>{label}</label>
+        <input
+          type={type}
+          value={config[key] ?? ''}
+          onChange={e => setConfig(prev => ({ ...prev, [key]: e.target.value }))}
+          placeholder={placeholder}
+          style={{
+            padding: '7px 10px', background: SURF2,
+            border: `1px solid ${BORDER}`, borderRadius: 3,
+            color: TEXT, fontFamily: MONO, fontSize: 12, outline: 'none',
+          }}
+        />
+      </div>
+    )
+  }
+
+  async function handleCreate() {
+    setSaving(true); setFormMsg(null)
+    try {
+      const res = await apiFetch('/alerts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: ruleName, trigger, channel, config }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const created = await res.json()
+
+      if (sendTest) {
+        try {
+          await apiFetch(`/alerts/${created.id}/test`, { method: 'POST' })
+          setFormMsg({ type: 'ok', text: 'Rule created. Test alert sent.' })
+        } catch {
+          setFormMsg({ type: 'ok', text: 'Rule created. Test alert failed to send.' })
+        }
+      } else {
+        setFormMsg({ type: 'ok', text: 'Rule created.' })
+      }
+
+      await loadRules()
+      setShowForm(false)
+    } catch (e) {
+      setFormMsg({ type: 'err', text: `Failed to create rule: ${e.message}` })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleToggle(rule) {
+    try {
+      await apiFetch(`/alerts/${rule.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !rule.enabled }),
+      })
+      await loadRules()
+    } catch {}
+  }
+
+  async function handleDelete(id) {
+    try {
+      await apiFetch(`/alerts/${id}`, { method: 'DELETE' })
+      await loadRules()
+    } catch {}
+  }
+
+  const TRIGGERS = ['CONTRADICTED', 'TAMPERED', 'UNVERIFIED', 'ANY']
+  const CHANNELS = ['webhook', 'email', 'slack']
+
+  const btnBase = {
+    padding: '8px 14px', background: 'transparent',
+    borderRadius: 3, fontFamily: MONO, fontSize: 12, cursor: 'pointer',
+    transition: 'border-color 0.15s, color 0.15s',
+  }
+
+  function TriggerBtn({ t }) {
+    const sel = trigger === t
+    return (
+      <button
+        onClick={() => pickTrigger(t)}
+        style={{
+          ...btnBase,
+          border: `1px solid ${sel ? TRIGGER_COLORS[t] : BORDER2}`,
+          color: sel ? TRIGGER_COLORS[t] : MUTED,
+        }}
+      >
+        {t === 'ANY' ? 'ANY VERDICT' : t}
+      </button>
+    )
+  }
+
+  function ChannelBtn({ c }) {
+    const sel = channel === c
+    return (
+      <button
+        onClick={() => pickChannel(c)}
+        style={{
+          ...btnBase,
+          border: `1px solid ${sel ? BLUE : BORDER2}`,
+          color: sel ? BLUE : MUTED,
+        }}
+      >
+        {CHANNEL_LABELS[c]}
+      </button>
+    )
+  }
+
+  return (
+    <div style={{ maxWidth: 680 }}>
+      {/* header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
+        <span style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: DIM }}>ALERT_RULES</span>
+        <button
+          onClick={showForm ? closeForm : openForm}
+          style={{
+            padding: '5px 14px', background: showForm ? 'transparent' : BLUE,
+            border: `1px solid ${showForm ? BORDER2 : BLUE}`,
+            borderRadius: 2, color: showForm ? MUTED : '#fff',
+            fontFamily: MONO, fontSize: 10, letterSpacing: '0.08em', cursor: 'pointer',
+          }}
+        >
+          {showForm ? 'CANCEL' : 'ADD_RULE'}
+        </button>
+      </div>
+
+      {/* inline add form */}
+      {showForm && (
+        <div style={{
+          marginBottom: 20, padding: '16px 18px',
+          background: SURF, border: `1px solid ${BORDER}`, borderRadius: 2,
+          display: 'flex', flexDirection: 'column', gap: 16,
+        }}>
+          {/* step 1 — trigger */}
+          <div>
+            <div style={{ fontFamily: MONO, fontSize: 10, color: DIM, letterSpacing: '0.1em', marginBottom: 8 }}>
+              STEP 1 — TRIGGER
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {TRIGGERS.map(t => <TriggerBtn key={t} t={t} />)}
+            </div>
+          </div>
+
+          {/* step 2 — channel */}
+          {step >= 2 && (
+            <div>
+              <div style={{ fontFamily: MONO, fontSize: 10, color: DIM, letterSpacing: '0.1em', marginBottom: 8 }}>
+                STEP 2 — CHANNEL
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {CHANNELS.map(c => <ChannelBtn key={c} c={c} />)}
+              </div>
+            </div>
+          )}
+
+          {/* step 3 — configure */}
+          {step >= 3 && channel && (
+            <div>
+              <div style={{ fontFamily: MONO, fontSize: 10, color: DIM, letterSpacing: '0.1em', marginBottom: 10 }}>
+                STEP 3 — CONFIGURE
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {channel === 'webhook' && (
+                  <>
+                    {configField('Webhook URL', 'url', 'https://...')}
+                    <div style={{ fontFamily: SANS, fontSize: 11, color: DIM, lineHeight: 1.5 }}>
+                      Receipts will POST a JSON payload to this URL when the verdict fires.
+                    </div>
+                  </>
+                )}
+                {channel === 'email' && (
+                  <>
+                    {configField('SMTP Host', 'smtp_host', 'smtp.gmail.com')}
+                    {configField('SMTP Port', 'smtp_port', '587')}
+                    {configField('Gmail address', 'smtp_user', 'you@gmail.com')}
+                    {configField('App password', 'smtp_pass', '16-char app password', 'password')}
+                    {configField('Send alerts to', 'to', 'alerts@yourcompany.com')}
+                    <div style={{ fontFamily: SANS, fontSize: 11, color: DIM, lineHeight: 1.5 }}>
+                      Use a Gmail App Password, not your account password. Generate one at{' '}
+                      <a
+                        href="https://myaccount.google.com/apppasswords"
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: 'inherit', textDecoration: 'none' }}
+                        onMouseEnter={e => { e.currentTarget.style.color = '#b45309' }}
+                        onMouseLeave={e => { e.currentTarget.style.color = 'inherit' }}
+                      >
+                        myaccount.google.com/apppasswords
+                      </a>.
+                    </div>
+                  </>
+                )}
+                {channel === 'slack' && (
+                  <>
+                    {configField('Slack Webhook URL', 'webhook_url', 'https://hooks.slack.com/...')}
+                    <div style={{ fontFamily: SANS, fontSize: 11, color: DIM, lineHeight: 1.5 }}>
+                      Create an incoming webhook at api.slack.com/apps → Incoming Webhooks.{' '}
+                      <a
+                        href="https://api.slack.com/messaging/webhooks"
+                        target="_blank"
+                        rel="noreferrer"
+                        style={{ color: 'inherit', textDecoration: 'none' }}
+                        onMouseEnter={e => { e.currentTarget.style.color = '#b45309' }}
+                        onMouseLeave={e => { e.currentTarget.style.color = 'inherit' }}
+                      >
+                        How to get a Slack webhook →
+                      </a>
+                    </div>
+                  </>
+                )}
+                <button
+                  onClick={() => setStep(4)}
+                  style={{
+                    alignSelf: 'flex-start', padding: '7px 14px',
+                    background: BLUE, border: `1px solid ${BLUE}`,
+                    borderRadius: 3, color: '#fff', fontFamily: MONO, fontSize: 12, cursor: 'pointer',
+                  }}
+                >
+                  Next →
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* step 4 — name & save */}
+          {step >= 4 && (
+            <div>
+              <div style={{ fontFamily: MONO, fontSize: 10, color: DIM, letterSpacing: '0.1em', marginBottom: 10 }}>
+                STEP 4 — NAME &amp; SAVE
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <label style={{ fontFamily: SANS, fontSize: 12, color: MUTED }}>Rule name</label>
+                  <input
+                    value={ruleName}
+                    onChange={e => setRuleName(e.target.value)}
+                    placeholder="e.g. Slack on CONTRADICTED"
+                    style={{
+                      padding: '7px 10px', background: SURF2,
+                      border: `1px solid ${BORDER}`, borderRadius: 3,
+                      color: TEXT, fontFamily: MONO, fontSize: 12, outline: 'none',
+                    }}
+                  />
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12, fontFamily: MONO, color: MUTED, cursor: 'pointer', userSelect: 'none' }}>
+                  <input
+                    type="checkbox"
+                    checked={sendTest}
+                    onChange={e => setSendTest(e.target.checked)}
+                    style={{ accentColor: BLUE }}
+                  />
+                  Send test alert after creation
+                </label>
+                {formMsg && (
+                  <div style={{
+                    padding: '8px 10px', borderRadius: 3, fontFamily: MONO, fontSize: 12,
+                    background: formMsg.type === 'ok' ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)',
+                    border: `1px solid ${formMsg.type === 'ok' ? GREEN : RED}`,
+                    color: formMsg.type === 'ok' ? GREEN : RED,
+                  }}>
+                    {formMsg.text}
+                  </div>
+                )}
+                <button
+                  onClick={handleCreate}
+                  disabled={saving || !ruleName}
+                  style={{
+                    alignSelf: 'flex-start', padding: '7px 16px',
+                    background: saving || !ruleName ? SURF2 : BLUE,
+                    border: `1px solid ${saving || !ruleName ? BORDER : BLUE}`,
+                    borderRadius: 3, color: saving || !ruleName ? MUTED : '#fff',
+                    fontFamily: MONO, fontSize: 12,
+                    cursor: saving || !ruleName ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {saving ? 'Creating...' : 'Create Rule'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* rules list */}
+      {rules.length === 0 ? (
+        <div style={{
+          padding: '48px 0', textAlign: 'center',
+          border: `1px solid ${BORDER}`, borderRadius: 2,
+          fontFamily: MONO, fontSize: 12, color: MUTED,
+          lineHeight: 1.8,
+        }}>
+          No alert rules configured.<br />
+          <span style={{ color: DIM }}>Add a rule to get notified when a verdict fires.</span>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {rules.map(rule => (
+            <AlertRuleCard
+              key={rule.id}
+              rule={rule}
+              onToggle={handleToggle}
+              onDelete={handleDelete}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── help view ─────────────────────────────────────────────────────────────────
+function CodeBlock({ code, lang }) {
+  const [copied, setCopied] = useState(false)
+  const lines = code.split('\n')
+  const isJson = lang === 'json'
+
+  function copy() {
+    navigator.clipboard.writeText(code)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+
+  return (
+    <div style={{ position: 'relative', border: `1px solid ${BORDER}`, borderRadius: 2, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', background: '#0d0d0d' }}>
+        {/* line numbers */}
+        <div style={{
+          padding: '10px 8px', userSelect: 'none',
+          fontFamily: MONO, fontSize: 11, lineHeight: 1.6,
+          color: DIM, textAlign: 'right',
+          borderRight: `1px solid ${BORDER}`,
+          minWidth: 32,
+        }}>
+          {lines.map((_, i) => <div key={i}>{i + 1}</div>)}
+        </div>
+        {/* code */}
+        <pre style={{
+          margin: 0, padding: '10px 12px',
+          background: '#0d0d0d',
+          fontSize: 11, fontFamily: MONO,
+          lineHeight: 1.6, overflowX: 'auto', color: TEXT,
+          flex: 1, paddingRight: 52,
+        }}>
+          {isJson ? lines.map(_tokenizeJsonLine) : code}
+        </pre>
+      </div>
+      <button
+        onClick={copy}
+        style={{
+          position: 'absolute', top: 6, right: 6,
+          padding: '2px 8px', background: SURF2,
+          border: `1px solid ${BORDER2}`, borderRadius: 2,
+          color: copied ? GREEN : DIM,
+          fontFamily: MONO, fontSize: 9, letterSpacing: '0.08em', cursor: 'pointer',
+          transition: 'color 0.15s',
+        }}
+      >
+        {copied ? 'COPIED' : 'COPY'}
+      </button>
+    </div>
+  )
+}
+
+function HelpSection({ title, children, defaultOpen = true }) {
+  const [open, setOpen] = useState(defaultOpen)
+
+  return (
+    <div style={{ border: `1px solid ${BORDER}`, borderRadius: 2, overflow: 'hidden', marginBottom: 10 }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+          padding: '10px 16px', background: SURF2,
+          border: 'none', borderBottom: open ? `1px solid ${BORDER}` : 'none',
+          cursor: 'pointer', textAlign: 'left',
+        }}
+      >
+        <span style={{ fontFamily: MONO, fontSize: 10, color: DIM, flexShrink: 0 }}>
+          {open ? '[-]' : '[+]'}
+        </span>
+        <span style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: '0.08em', color: TEXT }}>
+          {title.toUpperCase().replace(/ /g, '_')}
+        </span>
+      </button>
+      {open && (
+        <div style={{ padding: '14px 20px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function HelpStep({ n, text }) {
+  return (
+    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+      <span style={{
+        flexShrink: 0, fontFamily: MONO, fontSize: 10,
+        color: BLUE, letterSpacing: '0.04em', paddingTop: 1,
+        minWidth: 20,
+      }}>
+        {String(n).padStart(2, '0')}.
+      </span>
+      <span style={{ fontFamily: MONO, fontSize: 11, color: MUTED, lineHeight: 1.7 }}>{text}</span>
+    </div>
+  )
+}
+
+function ExternalLink({ href, children }) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      style={{ color: 'inherit', textDecoration: 'none' }}
+      onMouseEnter={e => { e.currentTarget.style.color = '#b45309' }}
+      onMouseLeave={e => { e.currentTarget.style.color = 'inherit' }}
+    >
+      {children}
+    </a>
+  )
+}
+
+function HelpSubSection({ title, children }) {
+  return (
+    <div style={{ borderLeft: `2px solid ${BORDER2}`, paddingLeft: 14 }}>
+      <div style={{ fontFamily: MONO, fontSize: 10, color: BLUE, letterSpacing: '0.1em', marginBottom: 10 }}>
+        {title.toUpperCase()}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function HelpView() {
+  return (
+    <div style={{ maxWidth: 720 }}>
+      <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: DIM, marginBottom: 16 }}>HELP_DOCS</div>
+
+      <HelpSection title="Connecting Claude Code">
+        <HelpStep n={1} text="Make sure the Receipts backend is running." />
+        <CodeBlock code={`cd /path/to/receipts
+RECEIPT_SECRET=your-secret python3 -m uvicorn backend.main:app --port 8000`} />
+
+        <HelpStep n={2} text="Add the MCP server config to ~/.claude/claude_mcp_config.json." />
+        <CodeBlock lang="json" code={`{
+  "mcpServers": {
+    "receipts": {
+      "command": "python3",
+      "args": ["-m", "receipts_mcp"],
+      "cwd": "/path/to/receipts",
+      "env": {
+        "RECEIPTS_URL": "http://localhost:8000"
+      }
+    }
+  }
+}`} />
+
+        <HelpStep n={3} text="Restart Claude Code. Tool calls will now route through Receipts automatically. Every tool call appears in the Live Ledger." />
+
+        <HelpStep n={4} text="Verify it's working — open a new Claude Code session and ask it to write a file or make a fetch call. You should see a receipt appear in the Live Ledger within seconds." />
+      </HelpSection>
+
+      <HelpSection title="Connecting Cursor">
+        <HelpStep n={1} text="Open Cursor Settings → Features → MCP Servers." />
+
+        <HelpStep n={2} text="Add the Receipts server." />
+        <CodeBlock lang="json" code={`{
+  "receipts": {
+    "command": "python3",
+    "args": ["-m", "receipts_mcp"],
+    "cwd": "/path/to/receipts",
+    "env": {
+      "RECEIPTS_URL": "http://localhost:8000"
+    }
+  }
+}`} />
+
+        <HelpStep n={3} text="Restart Cursor. File edits, terminal commands, and web fetches will generate signed receipts visible in the Live Ledger." />
+      </HelpSection>
+
+      <HelpSection title="Setting up Alerts">
+
+        <HelpSubSection title="Slack">
+          <HelpStep n={1} text={<>Go to <ExternalLink href="https://api.slack.com/apps">api.slack.com/apps</ExternalLink> and create a new app.</>} />
+          <HelpStep n={2} text="Enable Incoming Webhooks." />
+          <HelpStep n={3} text="Add a webhook to your workspace." />
+          <HelpStep n={4} text="Copy the webhook URL." />
+          <HelpStep n={5} text="Go to Alerts → Add Rule → Slack." />
+          <HelpStep n={6} text="Paste the URL and click Create Rule." />
+          <HelpStep n={7} text="Hit Test to confirm delivery." />
+        </HelpSubSection>
+
+        <HelpSubSection title="Gmail">
+          <div style={{ fontFamily: SANS, fontSize: 12, color: MUTED, lineHeight: 1.6, padding: '8px 10px', background: SURF2, border: `1px solid ${BORDER}`, borderRadius: 3 }}>
+            Gmail requires an App Password — your regular password will not work.
+          </div>
+          <HelpStep n={1} text={<>Go to <ExternalLink href="https://myaccount.google.com/apppasswords">myaccount.google.com/apppasswords</ExternalLink>.</>} />
+          <HelpStep n={2} text='Generate a new app password for "Mail".' />
+          <HelpStep n={3} text="Copy the 16-character password." />
+          <HelpStep n={4} text="Go to Alerts → Add Rule → Email." />
+          <HelpStep n={5} text="Enter smtp.gmail.com, port 587, your Gmail address, and the app password." />
+        </HelpSubSection>
+
+        <HelpSubSection title="Alertmanager">
+          <div style={{ fontFamily: SANS, fontSize: 12, color: TEXT, lineHeight: 1.6 }}>
+            Alertmanager accepts webhook notifications. Use the Webhook channel with your Alertmanager receiver URL:
+          </div>
+          <CodeBlock code="http://your-alertmanager:9093/api/v1/alerts" />
+          <div style={{ fontFamily: SANS, fontSize: 12, color: MUTED, lineHeight: 1.6 }}>
+            Receipts will POST a JSON payload on every verdict. Configure your Alertmanager receiver to parse the <code style={{ fontFamily: MONO, fontSize: 11 }}>verdict</code> and <code style={{ fontFamily: MONO, fontSize: 11 }}>session_id</code> fields.
+          </div>
+        </HelpSubSection>
+
+        <HelpSubSection title="Custom Webhooks">
+          <div style={{ fontFamily: SANS, fontSize: 12, color: TEXT, lineHeight: 1.6 }}>
+            Any service that accepts HTTP POST requests works as a Receipts alert destination. The payload shape:
+          </div>
+          <CodeBlock lang="json" code={`{
+  "event": "verdict.contradicted",
+  "verdict": "CONTRADICTED",
+  "session_id": "...",
+  "receipt_id": "...",
+  "tool_name": "delete_file",
+  "timestamp": "...",
+  "hmac_signature": "...",
+  "source": "receipts-v1"
+}`} />
+        </HelpSubSection>
+
+      </HelpSection>
+
+    </div>
+  )
+}
+
 // ── settings view ─────────────────────────────────────────────────────────────
 function SettingsView({ showFullHashes, setShowFullHashes }) {
   const settings = [
-    ['Backend URL',         'http://localhost:8000'],
-    ['Signing Algorithm',   'HMAC-SHA256'],
-    ['Hash Function',       'SHA-256 (sort_keys=True)'],
-    ['Storage',             'SQLite'],
-    ['Receipt Version',     'v1'],
-    ['Auto-refresh interval','3s'],
-    ['RECEIPT_SECRET',      '•••••••••••'],
+    ['BACKEND_URL',          'http://localhost:8000'],
+    ['SIGNING_ALGORITHM',    'HMAC-SHA256'],
+    ['HASH_FUNCTION',        'SHA-256 (sort_keys=True)'],
+    ['STORAGE',              'SQLITE'],
+    ['RECEIPT_VERSION',      'v1'],
+    ['AUTO_REFRESH_INTERVAL','3s'],
+    ['RECEIPT_SECRET',       '•••••••••••'],
   ]
 
   return (
     <div style={{ maxWidth: 560 }}>
-      <div style={{ border: `1px solid ${BORDER}`, borderRadius: 4, overflow: 'hidden', marginBottom: 20 }}>
+      <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: DIM, marginBottom: 12 }}>CONFIG_SYS</div>
+      <div style={{ border: `1px solid ${BORDER}`, borderRadius: 2, overflow: 'hidden', marginBottom: 20 }}>
         {settings.map(([key, val], i) => (
           <div key={key} style={{
             display: 'grid',
-            gridTemplateColumns: '200px 1fr',
+            gridTemplateColumns: '220px 1fr',
             gap: 16,
-            padding: '12px 16px',
+            padding: '11px 16px',
             borderBottom: i < settings.length - 1 ? `1px solid ${BORDER}` : 'none',
             alignItems: 'center',
+            background: i % 2 === 1 ? SURF2 : 'transparent',
           }}>
-            <span style={{ fontFamily: SANS, fontSize: 13, color: MUTED }}>{key}</span>
+            <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.08em', color: DIM }}>{key}</span>
             <span style={{ fontFamily: MONO, fontSize: 12, color: TEXT }}>{val}</span>
           </div>
         ))}
@@ -1373,15 +2134,15 @@ function SettingsView({ showFullHashes, setShowFullHashes }) {
         padding: '14px 16px',
         background: SURF,
         border: `1px solid ${BORDER}`,
-        borderRadius: 4,
+        borderRadius: 2,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
       }}>
         <div>
-          <div style={{ fontFamily: SANS, fontSize: 13, color: TEXT, marginBottom: 2 }}>Show raw hashes</div>
-          <div style={{ fontFamily: SANS, fontSize: 12, color: MUTED }}>
-            Display full hashes instead of truncated versions
+          <div style={{ fontFamily: MONO, fontSize: 11, letterSpacing: '0.08em', color: TEXT, marginBottom: 3 }}>SHOW_RAW_HASHES</div>
+          <div style={{ fontFamily: MONO, fontSize: 10, color: DIM, letterSpacing: '0.05em' }}>
+            DISPLAY FULL HASHES INSTEAD OF TRUNCATED
           </div>
         </div>
         <label style={{ position: 'relative', display: 'inline-block', width: 40, height: 20, cursor: 'pointer' }}>
@@ -1419,8 +2180,8 @@ function SettingsView({ showFullHashes, setShowFullHashes }) {
 async function generateReport(setToast) {
   try {
     const [rr, sr] = await Promise.all([
-      fetch('/receipts/all').then(r => r.json()),
-      fetch('/stats').then(r => r.json()),
+      apiFetch('/receipts/all').then(r => r.json()),
+      apiFetch('/stats').then(r => r.json()),
     ])
     const report = {
       generated_at: new Date().toISOString(),
@@ -1454,7 +2215,7 @@ export default function App() {
   useEffect(() => {
     async function check() {
       try {
-        const r = await fetch('/stats')
+        const r = await apiFetch('/stats')
         setProxyOnline(r.ok)
       } catch {
         setProxyOnline(false)
@@ -1500,12 +2261,12 @@ export default function App() {
         onReport={() => generateReport(setToast)}
       />
 
-      <div style={{ marginLeft: 220, flex: 1, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ marginLeft: 220, display: 'flex', flexDirection: 'column' }}>
         <Header view={view} proxyOnline={proxyOnline} />
 
         <main
           className={contentClass}
-          style={{ marginTop: 48, padding: 24, flex: 1 }}
+          style={{ marginTop: 48, padding: 24 }}
         >
           {view === 'ledger' && (
             <LedgerView showFullHashes={showFullHashes} onReconcile={goReconcile} proxyOnline={proxyOnline} />
@@ -1518,6 +2279,12 @@ export default function App() {
               initialSession={reconcileSession}
               onClearInitial={() => setReconcileSession(null)}
             />
+          )}
+          {view === 'alerts' && (
+            <AlertsView />
+          )}
+          {view === 'help' && (
+            <HelpView />
           )}
           {view === 'settings' && (
             <SettingsView

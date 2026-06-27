@@ -1,11 +1,14 @@
 import hashlib
 import hmac
 import json
-import os
 import uuid
 from datetime import datetime, timezone
 
-SECRET: bytes = os.environ.get("RECEIPT_SECRET", "dev-secret-do-not-use").encode("utf-8")
+from settings import get_settings
+
+# Resolved once at import. In production a missing/weak RECEIPT_SECRET raises here
+# (fail-fast); in dev/CI it falls back to a well-known dev key. See settings.py.
+SECRET: bytes = get_settings().resolved_secret()
 
 
 def _stable_json(obj: dict) -> str:

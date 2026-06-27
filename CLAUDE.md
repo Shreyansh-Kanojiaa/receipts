@@ -1,160 +1,175 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file is for Claude Code when working in this repository.
 
-# Receipts — AI Agent Outcome Verifier
+## Project summary
 
-## What we're building
-A Python FastAPI proxy that sits between an AI agent and its tools. Every tool call gets intercepted, executed, and signed with an HMAC receipt. A reconciliation engine checks if the agent's claimed output matches what actually happened.
+Receipts is an audit layer for AI tool use.
 
-## Stack
-- Backend: Python + FastAPI + SQLite
-- Frontend: React 19 + Vite 8 + Tailwind 3 (built, running)
-- Auth/signing: HMAC-SHA256
+- The MCP proxy forwards real tool calls to real upstream MCP servers.
+- The backend signs and stores the resulting tool input/output as receipts.
+- Verification compares agent claims with stored receipts and records verdicts.
+- The dashboard shows the ledger, sessions, reconciliation, alerts, help, and settings.
 
-## Key rules
-- Never trust the agent's self-report — always verify independently
-- Every tool call must produce a signed receipt
-- Green = verified, Red = agent lied
+## Important invariants
 
-## Commands
+- Do not trust the agent's self-report. Verification must come from stored receipts.
+- `/tools/record` is the production receipting path. It signs already executed calls.
+- `/tools/call` is demo-only mock execution and is gated by `ENABLE_DEMO_TOOLS`.
+- `signature_only` and `full_claim` are different scopes. Do not overwrite a richer `full_claim` verdict with a later signature-only sweep.
+- The `verify-claim` endpoint guards against circular re-verification: if a `full_claim` verdict already exists, it returns the stored verdict rather than re-running (re-running uses stored receipts as the claim source, which always collapses to VERIFIED). Pass `?force=true` to override.
+- The dashboard is a SPA with no router. Views live in `frontend/src/App.jsx`.
+- The frontend bundle must not ship backend secrets. In production nginx injects the proxy key header.
+- The real upstream result is ALWAYS returned to the agent, even if receipting fails — backend outages must not break agent tools.
+- Raw API keys are never stored. Only SHA-256 hashes live in the `api_keys` table.
 
-```bash
-# Install dependencies (from repo root)
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+## Code map
 
-# Terminal 1 — run the backend
-source .venv/bin/activate
-cd backend
-RECEIPT_SECRET=dev-secret python3 -m uvicorn main:app --reload
-# → http://localhost:8000  (docs at /docs)
+### Backend
 
-# Terminal 2 — from the repository root, run the frontend
-cd frontend
-npm install   # first time only
-npm run dev
-# → http://localhost:5173
+- `backend/main.py` — FastAPI routes, lifespan startup, timeout loop, alerts, demo run, rate limiting setup
+- `backend/database.py` — SQLite schema (receipts, sessions, api_keys, alert_rules), CRUD, session state, alert rules
+- `backend/signer.py` — canonical hashing (`json.dumps(sort_keys=True)`), HMAC signing, receipt assembly, signature verification
+- `backend/verifier.py` — claim verification (`run_verify`) and session verdict derivation (`derive_verdict`)
+- `backend/auto_verify.py` — signature-only verification for session close / inactivity; skips sessions with existing full_claim verdicts
+- `backend/alerts.py` — alert delivery: webhook (httpx), email (SMTP/STARTTLS with IPv4 resolution), Slack (Block Kit)
+- `backend/auth.py` — bearer / X-API-Key auth, three-tier role hierarchy (viewer < proxy < admin), bootstrap key seeding from `API_KEYS` env
+- `backend/settings.py` — pydantic-settings env-based config; production safety: missing/short RECEIPT_SECRET raises at startup
+- `backend/tools.py` — built-in demo tools (`write_file`, `http_fetch`, `db_query`) + `execute_tool()` dispatcher
+- `backend/models.py` — Pydantic v2 request/response schemas (ToolCallRequest, ToolRecordRequest, ReceiptResponse, ClaimedOutput, VerifyRequest, VerifyVerdict, VerifyResponse, DemoRunResponse, SessionResponse, CloseSessionResponse, AlertRule*)
+- `backend/logging_config.py` — structured JSON logging (JsonFormatter), context fields merged from `extra={}`, `prefers-reduced-motion` respected
+- `backend/Dockerfile` — Python 3.12-slim, uvicorn, healthcheck on `/healthz`
 
-# From the repository root, run backend tests
-python -m pytest
+### Frontend
 
-# Run a single test by name
-python -m pytest tests/test_verification.py::test_name -v
-```
+- `frontend/src/App.jsx` — all dashboard views and state (~2300 lines, inline-styled)
+  - Design tokens: CSS variables (`--bg`, `--surface`, `--green`, `--red`, `--amber`, `--blue`, `--mono`, `--sans`)
+  - Views: LedgerView, SessionsView, ReconciliationView, AlertsView, HelpView, SettingsView
+  - Shared components: Sidebar, Header, Toast, OfflineBanner, Pill, Dot, JsonHighlight, StatCard, LedgerRow, ReceiptCard
+  - `apiFetch()` injects `VITE_RECEIPTS_VIEWER_KEY` during local dev
+- `frontend/src/animations.js` — `countUp()` (easeOutQuart via rAF)
+- `frontend/src/index.css` — CSS variables, keyframe animations (row-highlight, pill-in, view transitions, toast, skeleton-pulse, spin), reduced-motion media query
+- `frontend/src/App.css` — legacy Vite scaffold styles (unused by dashboard)
+- `frontend/nginx.conf` — production SPA + API reverse proxy; envsubst injects `${BACKEND_HOST}` and `${PROXY_KEY}` at container start
+- `frontend/vite.config.js` — dev proxy rules for `/demo`, `/tools`, `/receipts`, `/verify`, `/stats`, `/sessions`, `/alerts`
+- `frontend/Dockerfile` — Node 20 build stage → nginx 1.27 serve stage
 
-`RECEIPT_SECRET` seeds the HMAC signing key. Omitting it falls back to a dev default — never use the default outside local development.
+### MCP proxy
 
-### Run the demo agent (CLI)
-
-With the backend running on `localhost:8000`, run these from the repository root:
-
-```bash
-python3 demo_agent.py --mode normal   # honest agent — claims match receipts → VERIFIED
-python3 demo_agent.py --mode lying    # agent reports output but never called any tool (no receipts) → UNVERIFIED
-python3 demo_agent.py --mode replit   # agent claims a write_file it never ran (only db_query) → CONTRADICTED
-```
-
-Or use the live buttons in the frontend at `http://localhost:5173`.
-
-## Architecture
-
-### Frontend (`frontend/`)
-
-React 19 + Vite 8. It is a **dashboard-only SPA** — there is no landing page. All app logic lives in two files (alongside `main.jsx` entry point, `index.css`/`App.css` styles, and `assets/`):
-- `frontend/src/App.jsx` — every component, hook, and view (~1400 lines, all in one file)
-- `frontend/src/animations.js` — exports only `countUp(from, to, duration, onUpdate)` (easeOutQuart, used by LedgerView stat counters)
-
-No routing library, no state management library.
-
-- `vite.config.js` — proxies `/demo`, `/tools`, `/receipts`, `/verify`, `/stats`, `/sessions` to `localhost:8000`
-- `tailwind.config.js` — Tailwind is wired up (`@tailwind` directives in `index.css`) but `theme.extend` is empty; the app is styled almost entirely with **inline `style={{}}` objects** referencing JS constants (`BG`, `TEXT`, `BLUE`, `MONO`, `SANS`, …) at the top of App.jsx, which in turn reference CSS custom properties.
-- `src/index.css` — `@tailwind` directives, design tokens under `:root` (`--mono` = JetBrains Mono, `--sans` = Inter, plus color vars), and all `@keyframes` (`row-highlight`, `pill-in`, `view-exit`/`view-enter`, `toast-in`/`toast-out`, `skeleton-pulse`, `spin`).
-
-**Layout:** fixed `Sidebar` (220px) + `Header` bar + `main` content area. `App` (bottom of App.jsx) holds the top-level state: `view`, `proxyOnline`, `toast`, `showFullHashes`, `reconcileSession`.
-
-**Four views** (sidebar `NAV_ITEMS`), switched by `switchView(next)` — plays a 150ms `view-exit` animation, swaps `view`, then a 200ms `view-enter`:
-1. **`ledger`** — `LedgerView`. Polls `/stats` + `/receipts/all` + `/sessions` every 3s (toggle via `autoRefresh`). Four stat cards: **Total Receipts**, **Verified** (`verdict='VERIFIED'`), **Successful Calls** (`status='success'`), **Tamper Alerts** (`verdict='TAMPERED'`) — successful-call and verified counts are intentionally distinct (a tool can run fine while the agent lies about its output). Stats count up from 0 on first load. New receipt rows are diffed against the previous id set and highlighted (`row-highlight`). Rows expand on click (`expandedId`). Has search, verdict filter, and time filter. Each row links to reconciliation via `onReconcile`.
-2. **`sessions`** — `SessionsView`. Polls `/sessions` every 5s; status pills and a per-session "reconcile" link (`onReconcile`).
-3. **`reconciliation`** — `ReconciliationView`. Session dropdown (from `/sessions`); see "Reconciliation flow" below. Reached from the other views via `goReconcile(sessionId)`, which sets `reconcileSession` and switches view.
-4. **`settings`** — `SettingsView`. Toggles `showFullHashes` (full vs. truncated hashes in the ledger).
-
-**Other behavior:**
-- `proxyOnline` is polled every 5s by fetching `/stats`; `OfflineBanner` shows when the backend is unreachable.
-- `generateReport()` (Sidebar "Report" button) fetches `/receipts/all` + `/stats` and downloads a JSON audit file via a Blob; surfaces a `Toast`.
-- `JsonHighlight`, `Pill`, `Dot`, `StatCard`, `ReceiptCard`, `LedgerRow` are the shared presentational components.
-
-**Status display:** no emojis in the UI. CONTRADICTED/TAMPERED render as bold red; VERIFIED renders green via `verdictColor()` + `Dot`/`Pill`.
-
-### Backend (`backend/`)
-
-All backend code lives in `backend/`. Five focused modules with no internal abstraction layers:
-
-- **`signer.py`** — all cryptographic logic: `hash_dict()` (stable JSON → SHA256), `sign_receipt()` (HMAC-SHA256 over 7 canonical fields), `verify_receipt_signature()` (constant-time validation), `build_receipt()` (assembles the full receipt dict), `compute_claimed_hash()` (alias for `hash_dict`, used by `/verify`). The canonical form uses `json.dumps(sort_keys=True)` so dict key ordering never affects hashes.
-
-- **`tools.py`** — mock tool implementations (`write_file`, `http_fetch`, `db_query`) and `execute_tool(tool_name, tool_input)` dispatcher. Tools are called with `**tool_input` so dict keys must match function parameter names. To add a new tool: implement a function that returns a `dict`, then register it in `TOOL_REGISTRY`.
-
-- **`database.py`** — sqlite3 CRUD: `init_db()`, `insert_receipt()`, `update_receipt_verdict()`, `get_receipts_for_session()`, `get_receipt_for_session()`, `get_all_receipts(limit)`, `get_stats()`, plus session functions: `upsert_session()`, `close_session()`, `get_session()`, `get_all_sessions()`, `get_open_sessions_older_than()`, `update_session_verdict()`, `update_session_status()`. DB file is `backend/receipts.db`. Per-call connections (no shared state). `init_db()` runs `ALTER TABLE ADD COLUMN` migrations so existing DBs upgrade automatically. `get_stats()` keys: `total_receipts`, `verified` (receipt `verdict='VERIFIED'` — claim verified), `successful_calls` (receipt `status='success'` — tool ran without error), `tamper_alerts` (receipt `verdict='TAMPERED'`), `sessions`, `total_sessions`, `open_sessions`, `verified_sessions`, `failed_sessions`.
-  - `receipts` schema: `id, session_id, tool_name, timestamp, input_hash, output_hash, status, hmac_signature, verdict, tool_input, tool_output`
-  - `sessions` schema: `session_id, created_at, last_activity, closed_at, status, auto_verdict, auto_verified_at, receipt_count, verification_scope`
-  - `verification_scope` values: `'signature_only'` (auto-verify result) or `'full_claim'` (manual reconciliation or demo_run result). `update_session_verdict(session_id, verdict, verified_at, scope='signature_only')` accepts the scope kwarg.
-
-- **`models.py`** — Pydantic v2 request/response schemas. `ReceiptResponse` includes optional `verdict`, `tool_input`, `tool_output`. `SessionResponse` includes `verification_scope: str | None`. Each `ClaimedOutput` requires `receipt_id`.
-
-- **`verifier.py`** — `run_verify(session_id, claimed_outputs)` and `derive_verdict(verdicts)`. Called by `/verify`, `/sessions/{id}/verify-claim`, and `demo_run`. Writes per-receipt verdicts as a side effect. `derive_verdict` severity ordering: TAMPERED > CONTRADICTED > UNVERIFIED — a provable mismatch (receipt exists, valid signature, claim differs) outranks a missing receipt.
-
-- **`auto_verify.py`** — checks HMAC signatures only (does NOT use `run_verify`). Detects `TAMPERED` (bad signature) or `VERIFIED` (all intact). Writes `verdict='TAMPERED'` to individual receipt rows for tampered receipts (so the ledger and tamper_alerts stat reflect tampering caught on this path); does not stamp `VERIFIED` on receipt rows since a valid signature alone doesn't verify the agent's claim. Cannot detect `CONTRADICTED` or `UNVERIFIED` without the agent's original claims. Skips if `verification_scope='full_claim'` already set. Returns `None` for sessions with no receipts (status set to `'closed'`, no verdict written).
-
-- **`main.py`** — route handlers. `/tools/call` executes → signs → stores → upserts session → returns receipt. `/receipts/all` defined before `/receipts/{session_id}` to avoid FastAPI routing conflict. `/verify` delegates to `run_verify`. `/demo/run?mode=X` orchestrates a full scenario, runs verify, then persists the session verdict with `scope='full_claim'`. Session routes: `GET /sessions`, `GET /sessions/{id}`, `POST /sessions/{id}/close` (triggers async auto_verify), `POST /sessions/{id}/verify-claim` (full-claim manual reconciliation, writes `scope='full_claim'`; guards against re-verifying a session that already has a `full_claim` verdict — returns `{already_verified, verdict, verification_scope, message}` instead, unless `?force=true` is passed). Lifespan starts `timeout_checker_loop` which closes and auto-verifies sessions idle for 30s.
-
-- **`demo_agent.py`** — standalone `requests`-based demonstration client at the repository root. It drives `/tools/call` + `/verify` directly (not `/demo/run`). `/demo/run` is exercised by the test suite and by curl/`/docs`; the dashboard frontend does not call it.
-
-### API endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/tools/call` | Execute a tool, get back a signed receipt |
-| `GET`  | `/receipts/{session_id}` | All receipts for a session |
-| `GET`  | `/receipts/all` | Most recent 50 receipts across all sessions |
-| `GET`  | `/stats` | Aggregate counts (receipts, sessions, tamper alerts) |
-| `POST` | `/verify` | Verify exact receipt IDs, output hashes, and HMAC signatures |
-| `GET`  | `/sessions` | All sessions (most recent 50) |
-| `GET`  | `/sessions/{session_id}` | Single session detail |
-| `POST` | `/sessions/{session_id}/close` | Explicitly close a session; schedules auto-verify |
-| `POST` | `/sessions/{session_id}/verify-claim` | Full-claim reconciliation; writes `scope='full_claim'` |
-| `POST` | `/demo/run?mode=X` | Orchestrate a full demo scenario end-to-end |
-
-### Verify flow
-`/verify` accepts `{session_id, claimed_outputs: [{receipt_id, tool_name, output}]}`. For each entry it loads that exact receipt within the session, re-hashes the claimed output using `hash_dict()`, and re-validates the stored HMAC signature. A claim is verified only when the receipt exists, its tool name and output hash match, and its signature is valid. Every verdict includes `receipt_id`, `signature_valid`, and an optional failure `reason`. After computing each verdict, `/verify` writes it back to the DB row via `update_receipt_verdict()`.
-
-### Verification scope — two distinct checks
-
-Two different things can be verified, and the system tracks which has been done:
-
-| Scope | Endpoint | What it checks | Can detect |
-|-------|----------|----------------|------------|
-| `signature_only` | auto-verify (timeout/close) | HMAC signatures on stored receipts | TAMPERED, VERIFIED |
-| `full_claim` | `/sessions/{id}/verify-claim`, `demo_run` | Agent's claimed output vs. stored receipts | TAMPERED, VERIFIED, CONTRADICTED, UNVERIFIED |
-
-`auto_verify` skips sessions that already have `scope='full_claim'` so it never overwrites a more informative verdict. The frontend shows a `sig. only` sub-label on verdict pills when `verification_scope='signature_only'`.
-
-### Session lifecycle
-`open` → tool calls arrive, `upsert_session` increments `receipt_count`  
-`closed` → explicit `POST /sessions/{id}/close` or 30s inactivity timeout  
-`verified` → `auto_verify` or `verify-claim` completes and writes verdict + scope
-
-### Reconciliation flow (frontend)
-Session dropdown populated from `/sessions`. Clicking "Run Reconciliation" fetches `/receipts/{session_id}` to get stored `tool_output`, builds `claimed_outputs` from those actual values, and POSTs to `/sessions/{id}/verify-claim` (not `/verify`) so the result is persisted with `scope='full_claim'`. Results show a full-width verdict banner and one `ReceiptCard` per receipt with a 4-field comparison table. The Live Ledger's expanded row detail has a "Reconcile this session →" button.
-
-**Circular re-run guard.** Reconciliation builds the claim from the *stored* receipts, so re-verifying a session always collapses to VERIFIED (the claim is its own source of truth) — which would silently destroy a `CONTRADICTED`/`UNVERIFIED` verdict from `demo_run`. So when a selected session already has `verification_scope='full_claim'` with an `auto_verdict`, `ReconciliationView` (via `showStoredVerdict`) renders the **stored** verdict immediately without calling `verify-claim` — top banner from `auto_verdict`, per-receipt cards synthesized from each receipt's stored `verdict` string — and shows an "ON RECORD / Full claim verification on record" label. The button changes to "Re-run Reconciliation" with a warning, and only an explicit click POSTs with `?force=true` to override the backend guard. The backend enforces the same guard server-side (returns `already_verified` unless forced), which `runForSession` also handles defensively.
+- `receipts_mcp/server.py` — stdio MCP server entrypoint; connects upstreams via `ClientSessionGroup`, falls back to demo tools
+- `receipts_mcp/proxy.py` — upstream forwarding (`call_and_record`), receipting (`record_receipt`), tool namespacing (`<server>__<tool>`), result normalization
+- `receipts_mcp/config.py` — `ProxySettings` (pydantic-settings), `load_upstreams()` with `${ENV_VAR}` expansion, transport support (stdio/sse/streamable_http)
+- `receipts_mcp/upstreams.json.example` — example upstream config (filesystem + github)
+- `receipts_mcp/__init__.py` — package marker
+- `receipts_mcp/__main__.py` — `python -m receipts_mcp` entry
 
 ### Tests
 
-`tests/test_verification.py` (12 tests) uses isolated temporary SQLite databases. Covers: exact receipt matching for repeated tool calls, tampered signatures, missing/cross-session/tool-mismatched references, all demo modes, auto_verify signature-only logic, session timeout detection, and explicit close endpoint with background auto-verify.
+- `tests/test_verification.py` — verification logic, receipt-ID requirements, repeated tool calls, output mismatches, tampered signatures, cross-session rejection, tool name mismatch, all three demo modes, auto-verify (VERIFIED/TAMPERED/empty session), session timeout detection, explicit close endpoint, `/tools/record` signing, auth enforcement (401/403/200)
+- `tests/test_proxy.py` — real upstream via `tests/fixtures/mock_upstream.py`, proxy forwarding + receipting, namespacing, error recording
+- `tests/fixtures/mock_upstream.py` — minimal stdio MCP server exposing `echo` tool
+- `test_mcp.py` — smoke test against a live backend (receipting path, session visibility, auth)
 
-## Repo hygiene note
-A `.gitignore` is in the repo root. `backend/receipts.db`, `__pycache__/`, `.venv/`, and `frontend/node_modules/` are excluded. `current_state.md` is a scratch/reference artifact not part of the build (it is currently tracked but is not used by the app).
+## Working rules
 
-## Known limitations (not yet implemented)
-- All tool implementations are mocks — no real file I/O, HTTP, or DB access occurs
-- No authentication or API keys on any endpoint. `RECEIPT_SECRET` also falls back to a hardcoded dev default when unset, so signatures are forgeable unless it is exported — never run outside local dev without it
+- Prefer the repo's existing patterns. This codebase is intentionally direct and low abstraction.
+- Keep backend and README docs in sync with actual endpoints and behavior.
+- Do not rename verdicts or scopes casually. `VERIFIED`, `UNVERIFIED`, `CONTRADICTED`, and `TAMPERED` are used across backend and UI.
+- If you touch verification logic, update the session scope handling and the dashboard labels together.
+- If you touch auth or settings, make sure the Quick Start, `.env.example`, and container defaults still line up.
+- If you touch the proxy, keep the "real result still returns even if receipting fails" behavior intact.
+- If you add an endpoint, update `frontend/vite.config.js` proxy rules and `frontend/nginx.conf` location regex.
+- If you add a model, update `backend/models.py` and the response type annotation on the route.
+
+## Local commands
+
+```bash
+# Install backend and proxy dependencies
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Run the backend
+cd backend
+RECEIPT_SECRET=dev-secret \
+API_KEYS="dashboard:viewer:devviewer,proxy:proxy:devproxy" \
+python3 -m uvicorn main:app --reload
+
+# Run the frontend
+cd frontend
+npm install
+echo "VITE_RECEIPTS_VIEWER_KEY=devproxy" > .env.local
+npm run dev
+
+# Run tests
+python -m pytest
+
+# Smoke test the backend receipting path
+python3 test_mcp.py
+
+# Run the MCP proxy (standalone)
+python3 -m receipts_mcp
+
+# Run demo scenarios
+python3 demo_agent.py --mode normal
+python3 demo_agent.py --mode lying
+python3 demo_agent.py --mode replit
+
+# Docker deployment
+cp .env.example .env  # fill in secrets
+docker compose up --build
+```
+
+## Frontend notes
+
+- The app is dashboard-only. There is no landing page or routing library.
+- All views are in `App.jsx`: ledger, sessions, reconciliation, alerts, help, settings.
+- `apiFetch()` injects `VITE_RECEIPTS_VIEWER_KEY` during local dev.
+- The Live Ledger polls `/stats`, `/receipts/all`, and `/sessions` every 3s (toggleable auto-refresh).
+- Ledger supports search (session/tool name), verdict filter, time filter, and pagination (20 rows/page).
+- New receipt rows are highlighted amber for 2 seconds via `.row-new` keyframe.
+- Stats count up from 0 on first load (once, tracked by `hasCountedRef`).
+- Reconciliation uses `/sessions/{id}/verify-claim`, not `/verify`, so verdicts persist with `scope='full_claim'`.
+- If a session already has a `full_claim` verdict, the reconciliation view shows the stored verdict without re-running.
+- View transitions: 150ms exit → swap → 200ms enter (opacity fade).
+- Design rule: zero emojis. Status indicators use CSS dots and color.
+
+## Backend notes
+
+- `backend/main.py` exposes:
+  - `/tools/record` and `/tools/call`
+  - `/verify`
+  - `/sessions`, `/sessions/{id}`, `/sessions/{id}/close`, `/sessions/{id}/verify-claim`
+  - `/receipts/all`, `/receipts/{session_id}`
+  - `/stats`
+  - `/alerts`, `/alerts/{id}`, `/alerts/{id}/test`
+  - `/demo/run`
+  - `/healthz` and `/readyz`
+- API keys are stored hashed only. Bootstrap keys come from `API_KEYS`.
+- The background timeout loop closes stale sessions after `INACTIVITY_TIMEOUT_SECONDS` (default 30s) of inactivity.
+- `auto_verify()` is signature-only and should not stamp intact receipts as verified rows (only tampered rows get a verdict written).
+- `auto_verify()` skips sessions with an existing `full_claim` verdict to avoid overwriting richer verdicts.
+- Rate limiting: global per-client-IP via slowapi, default `120/minute`.
+- Structured JSON logging: every log line is a JSON object with `ts`, `level`, `logger`, `message`, and context fields (session_id, tool_name, verdict, etc.).
+- Production safety: missing/short `RECEIPT_SECRET` raises at startup when `ENVIRONMENT=production`.
+- CORS origins are configurable; default `*` in dev, locked down in production.
+
+## Proxy notes
+
+- Upstream tools are namespaced as `<server>__<tool>`.
+- If no upstreams file exists, the proxy falls back to `write_file`, `http_fetch`, and `db_query`.
+- `receipts_mcp/upstreams.json` supports `stdio`, `sse`, and `streamable_http` transports.
+- `${ENV_VAR}` references inside upstream configs are expanded at runtime.
+- Each proxy process uses one `mcp-<hex>` session ID.
+- `record_receipt()` never raises — receipting is best-effort relative to returning the agent's result.
+- A 401/403 from the backend during receipting is logged as an error (misconfigured key) so it's not silently mistaken for a transient outage.
+- Upstream timeouts default to 60s (`TOOL_TIMEOUT_SECONDS`); backend POST timeout defaults to 5s (`RECORD_TIMEOUT_SECONDS`).
+
+## Alert notes
+
+- Alert rules are stored in the `alert_rules` SQLite table.
+- Each rule has: name, trigger (`CONTRADICTED`/`TAMPERED`/`UNVERIFIED`/`ANY`), channel (`webhook`/`email`/`slack`), config (channel-specific JSON), enabled flag.
+- Alerts fire as background tasks after verification verdicts.
+- Email delivery uses SMTP/STARTTLS with forced IPv4 resolution (avoids Docker bridge IPv6 issues).
+- The `/alerts/{id}/test` endpoint sends a test alert with a fake receipt.
+- Webhook payload includes: event, verdict, session_id, receipt_id, tool_name, timestamp, hashes, hmac_signature, source.

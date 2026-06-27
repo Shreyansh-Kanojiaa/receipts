@@ -9,16 +9,21 @@ Run with:
 import argparse
 from datetime import datetime
 import json
+import os
 
 import requests
 
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = os.environ.get("RECEIPTS_URL", "http://localhost:8000")
+# Backend now requires auth; pass a proxy-role key. Defaults to the dev key from the
+# documented Quick start (API_KEYS=...proxy:proxy:devproxy).
+API_KEY = os.environ.get("RECEIPTS_API_KEY", "devproxy")
 
 
 def post(path, payload):
     """Send a JSON request to the Receipts backend and return its JSON body."""
-    response = requests.post(f"{BASE_URL}{path}", json=payload, timeout=10)
+    headers = {"Authorization": f"Bearer {API_KEY}"}
+    response = requests.post(f"{BASE_URL}{path}", json=payload, headers=headers, timeout=10)
     response.raise_for_status()
     return response.json()
 

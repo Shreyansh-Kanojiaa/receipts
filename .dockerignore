@@ -1,0 +1,10 @@
+.venv/
+**/__pycache__/
+**/*.pyc
+backend/receipts.db
+frontend/node_modules/
+frontend/dist/
+.git/
+.env
+*.md
+tests/

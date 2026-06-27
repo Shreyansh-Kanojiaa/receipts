@@ -2,7 +2,29 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "receipts.db"
+from settings import get_settings
+
+
+def _resolve_db_path() -> Path:
+    """Parse the sqlite:/// URL from settings into a filesystem path.
+
+    Only the sqlite form is supported today; a future Postgres DSN would branch here.
+    Relative URLs resolve against the backend/ directory so the default matches the
+    historical ``backend/receipts.db`` location.
+    """
+    url = get_settings().database_url
+    if url.startswith("sqlite:///"):
+        raw = url[len("sqlite:///"):]
+        path = Path(raw)
+        if not path.is_absolute():
+            path = Path(__file__).parent / path
+        return path
+    # Non-sqlite URLs are not yet supported by this module.
+    return Path(__file__).parent / "receipts.db"
+
+
+# Module global so tests can monkeypatch it directly; get_connection reads it at call time.
+DB_PATH = _resolve_db_path()
 
 
 def get_connection() -> sqlite3.Connection:
@@ -55,7 +77,65 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_session ON receipts(session_id)"
         )
+
+        # API keys. Only SHA-256 hashes are stored, never raw keys. tenant_id is
+        # nullable today (single-tenant) so multi-tenancy can slot in later without
+        # a meaning-changing migration.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id          TEXT PRIMARY KEY,
+                key_hash    TEXT NOT NULL UNIQUE,
+                label       TEXT NOT NULL,
+                role        TEXT NOT NULL CHECK(role IN ('proxy', 'viewer', 'admin')),
+                tenant_id   TEXT,
+                created_at  TEXT NOT NULL,
+                revoked_at  TEXT
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_api_key_hash ON api_keys(key_hash)"
+        )
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS alert_rules (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                enabled     INTEGER NOT NULL DEFAULT 1,
+                trigger     TEXT NOT NULL,
+                channel     TEXT NOT NULL,
+                config      TEXT NOT NULL,
+                created_at  TEXT NOT NULL
+            )
+        """)
         conn.commit()
+
+
+# ── api keys ──────────────────────────────────────────────────────────────────
+
+def insert_api_key(id: str, key_hash: str, label: str, role: str,
+                   created_at: str, tenant_id: str | None = None) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT OR IGNORE INTO api_keys
+               (id, key_hash, label, role, tenant_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (id, key_hash, label, role, tenant_id, created_at),
+        )
+        conn.commit()
+
+
+def get_api_key_by_hash(key_hash: str) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL",
+            (key_hash,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def count_api_keys() -> int:
+    with get_connection() as conn:
+        return conn.execute("SELECT COUNT(*) AS n FROM api_keys").fetchone()["n"]
 
 
 # ── receipts ──────────────────────────────────────────────────────────────────
@@ -225,6 +305,67 @@ def get_all_sessions(limit: int = 50) -> list[dict]:
 
 
 # ── stats ─────────────────────────────────────────────────────────────────────
+
+# ── alert rules ───────────────────────────────────────────────────────────────
+
+def create_alert_rule(name: str, trigger: str, channel: str, config: str) -> dict:
+    import uuid
+    rule_id = str(uuid.uuid4())
+    now = _now()
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO alert_rules (id, name, enabled, trigger, channel, config, created_at)
+               VALUES (?, ?, 1, ?, ?, ?, ?)""",
+            (rule_id, name, trigger, channel, config, now),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM alert_rules WHERE id = ?", (rule_id,)).fetchone()
+    return dict(row)
+
+
+def get_alert_rules() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM alert_rules ORDER BY created_at DESC"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_alert_rule(rule_id: str) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM alert_rules WHERE id = ?", (rule_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_alert_rule(rule_id: str, **kwargs) -> dict | None:
+    allowed = {"name", "enabled", "trigger", "channel", "config"}
+    fields = {k: v for k, v in kwargs.items() if k in allowed}
+    if fields:
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        values = list(fields.values()) + [rule_id]
+        with get_connection() as conn:
+            conn.execute(f"UPDATE alert_rules SET {set_clause} WHERE id = ?", values)
+            conn.commit()
+    return get_alert_rule(rule_id)
+
+
+def delete_alert_rule(rule_id: str) -> bool:
+    with get_connection() as conn:
+        cursor = conn.execute("DELETE FROM alert_rules WHERE id = ?", (rule_id,))
+        conn.commit()
+    return cursor.rowcount > 0
+
+
+def get_enabled_rules_for_verdict(verdict: str) -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM alert_rules WHERE enabled = 1 AND (trigger = ? OR trigger = 'ANY')",
+            (verdict,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
 
 def get_stats() -> dict:
     with get_connection() as conn:

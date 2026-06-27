@@ -861,9 +861,78 @@ function SessionStatusPill({ session }) {
   )
 }
 
+function SessionTimeline({ session, onReconcile }) {
+  const [receipts, setReceipts] = useState(null)
+  const [loadingRx, setLoadingRx] = useState(true)
+
+  useEffect(() => {
+    apiFetch(`/receipts/${session.session_id}`)
+      .then(r => r.json())
+      .then(data => { setReceipts(data); setLoadingRx(false) })
+      .catch(() => setLoadingRx(false))
+  }, [session.session_id])
+
+  const sessionStart = session.created_at ? new Date(session.created_at) : null
+
+  return (
+    <div style={{
+      borderTop: `1px solid ${BORDER}`,
+      background: 'rgba(0,0,0,0.18)',
+      padding: '14px 16px 14px 24px',
+    }}>
+      {loadingRx ? (
+        <div style={{ fontFamily: MONO, fontSize: 11, color: DIM }}>Loading receipts…</div>
+      ) : !receipts || receipts.length === 0 ? (
+        <div style={{ fontFamily: MONO, fontSize: 11, color: DIM }}>No receipts in this session.</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+          {receipts.map((r, i) => {
+            const offsetMs  = sessionStart ? new Date(r.timestamp) - sessionStart : null
+            const offsetStr = offsetMs !== null ? `+${(offsetMs / 1000).toFixed(1)}s` : '—'
+            const dotColor  = r.verdict ? verdictColor(r.verdict)
+              : r.status === 'error' ? RED : MUTED
+            const isLast = i === receipts.length - 1
+            return (
+              <div key={r.id} style={{ display: 'flex', gap: 10, alignItems: 'stretch', minHeight: 32 }}>
+                {/* track */}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 14, flexShrink: 0 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, marginTop: 6, flexShrink: 0 }} />
+                  {!isLast && <div style={{ width: 1, flex: 1, background: BORDER, minHeight: 8 }} />}
+                </div>
+                {/* row content */}
+                <div style={{ flex: 1, display: 'flex', gap: 10, alignItems: 'center', paddingBottom: isLast ? 0 : 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontFamily: MONO, fontSize: 10, color: DIM, width: 52, flexShrink: 0 }}>{offsetStr}</span>
+                  <span style={{ fontFamily: MONO, fontSize: 11, color: TEXT, flex: 1, minWidth: 100 }}>{r.tool_name}</span>
+                  <Pill color={r.status === 'error' ? RED : GREEN}>{r.status}</Pill>
+                  {r.verdict && <Pill color={verdictColor(r.verdict)}>{verdictLabel(r.verdict)}</Pill>}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* footer actions */}
+      <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${BORDER}`, display: 'flex', justifyContent: 'flex-end' }}>
+        <button
+          onClick={e => { e.stopPropagation(); onReconcile?.(session.session_id) }}
+          style={{
+            fontFamily: MONO, fontSize: 10, letterSpacing: '0.08em',
+            background: 'transparent', border: `1px solid ${BORDER}`,
+            color: BLUE, cursor: 'pointer', padding: '5px 10px', borderRadius: 2,
+          }}
+        >
+          OPEN RECONCILIATION →
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function SessionsView({ onReconcile }) {
-  const [sessions, setSessions] = useState([])
-  const [loading, setLoading]   = useState(true)
+  const [sessions, setSessions]         = useState([])
+  const [loading, setLoading]           = useState(true)
+  const [expanded, setExpanded]         = useState(null)
 
   useEffect(() => {
     let active = true
@@ -878,7 +947,7 @@ function SessionsView({ onReconcile }) {
     return () => { active = false; clearInterval(t) }
   }, [])
 
-  const COL = '1fr 120px 80px 60px 100px 110px 100px'
+  const COL = '1fr 120px 80px 60px 100px 110px 90px 16px'
 
   return (
     <div>
@@ -896,6 +965,7 @@ function SessionsView({ onReconcile }) {
           <span>STATUS</span>
           <span>SCOPE</span>
           <span>VERDICT</span>
+          <span />
         </div>
 
         {loading ? (
@@ -911,45 +981,53 @@ function SessionsView({ onReconcile }) {
             const scopeLabel = s.verification_scope === 'signature_only' ? 'SIG_ONLY'
               : s.verification_scope === 'full_claim' ? 'FULL_CLAIM' : null
             const scopeColor = s.verification_scope === 'full_claim' ? BLUE : DIM
+            const isOpen = expanded === s.session_id
             return (
-              <div
-                key={s.session_id}
-                onClick={() => onReconcile?.(s.session_id)}
-                style={{
-                  display: 'grid', gridTemplateColumns: COL, gap: 12,
-                  padding: '10px 16px', borderBottom: `1px solid ${BORDER}`,
-                  cursor: 'pointer', fontSize: 12, alignItems: 'center',
-                  transition: 'background 0.15s',
-                }}
-                onMouseEnter={e => { e.currentTarget.style.background = SURF2 }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'transparent' }}
-              >
-                <span style={{ fontFamily: MONO, fontSize: 11, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.session_id}>
-                  {s.session_id}
-                </span>
-                <span style={{ fontFamily: MONO, fontSize: 11, color: MUTED }}>{fmtTs(s.created_at)}</span>
-                <span style={{ fontFamily: MONO, fontSize: 11, color: MUTED }}>{fmtDuration(s.created_at, s.closed_at)}</span>
-                <span style={{ fontFamily: MONO, fontSize: 11, color: TEXT }}>{s.receipt_count}</span>
-                <span><SessionStatusPill session={s} /></span>
-                <span>
-                  {scopeLabel
-                    ? <Pill color={scopeColor}>{scopeLabel}</Pill>
-                    : <span style={{ fontFamily: MONO, fontSize: 11, color: DIM }}>—</span>
-                  }
-                </span>
-                <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  {s.auto_verdict
-                    ? <Pill color={verdictColor(s.auto_verdict)}>{verdictLabel(s.auto_verdict)}</Pill>
-                    : <span style={{ fontFamily: MONO, fontSize: 11, color: DIM }}>—</span>
-                  }
-                </span>
+              <div key={s.session_id} style={{ borderBottom: `1px solid ${BORDER}` }}>
+                <div
+                  onClick={() => setExpanded(isOpen ? null : s.session_id)}
+                  style={{
+                    display: 'grid', gridTemplateColumns: COL, gap: 12,
+                    padding: '10px 16px', cursor: 'pointer', fontSize: 12, alignItems: 'center',
+                    background: isOpen ? SURF2 : 'transparent', transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.background = SURF2 }}
+                  onMouseLeave={e => { e.currentTarget.style.background = isOpen ? SURF2 : 'transparent' }}
+                >
+                  <span style={{ fontFamily: MONO, fontSize: 11, color: TEXT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={s.session_id}>
+                    {s.session_id}
+                  </span>
+                  <span style={{ fontFamily: MONO, fontSize: 11, color: MUTED }}>{fmtTs(s.created_at)}</span>
+                  <span style={{ fontFamily: MONO, fontSize: 11, color: MUTED }}>{fmtDuration(s.created_at, s.closed_at)}</span>
+                  <span style={{ fontFamily: MONO, fontSize: 11, color: TEXT }}>{s.receipt_count}</span>
+                  <span><SessionStatusPill session={s} /></span>
+                  <span>
+                    {scopeLabel
+                      ? <Pill color={scopeColor}>{scopeLabel}</Pill>
+                      : <span style={{ fontFamily: MONO, fontSize: 11, color: DIM }}>—</span>
+                    }
+                  </span>
+                  <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {s.auto_verdict
+                      ? <Pill color={verdictColor(s.auto_verdict)}>{verdictLabel(s.auto_verdict)}</Pill>
+                      : <span style={{ fontFamily: MONO, fontSize: 11, color: DIM }}>—</span>
+                    }
+                  </span>
+                  {/* chevron */}
+                  <span style={{ fontFamily: MONO, fontSize: 10, color: DIM, textAlign: 'right', userSelect: 'none' }}>
+                    {isOpen ? '▲' : '▼'}
+                  </span>
+                </div>
+                {isOpen && (
+                  <SessionTimeline session={s} onReconcile={onReconcile} />
+                )}
               </div>
             )
           })
         )}
       </div>
       <div style={{ marginTop: 8, fontFamily: MONO, fontSize: 10, color: DIM, letterSpacing: '0.06em' }}>
-        CLICK ANY ROW TO OPEN RECONCILIATION
+        CLICK ANY ROW TO EXPAND TIMELINE
       </div>
     </div>
   )

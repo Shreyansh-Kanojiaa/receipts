@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "receipts-mcp"
-version = "0.1.0"
+version = "0.1.1"
 description = "MCP proxy that records and cryptographically signs AI agent tool calls"
 readme = "receipts_mcp/README.md"
 requires-python = ">=3.12"

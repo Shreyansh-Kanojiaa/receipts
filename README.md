@@ -10,7 +10,7 @@ The proxy forwards real tool calls to real upstream MCP servers, captures the re
 
 The repo also includes a built-in demo path so a fresh checkout works without any external MCP server. In demo mode the backend executes three mock tools, and the proxy can fall back to those same tools when no upstreams are configured.
 
-![Live Ledger](docs/live-ledger.png)
+![Live Ledger](docs/live-ledger-2.png)
 
 ## What is in the repo
 
@@ -151,6 +151,10 @@ Bootstrap keys from the `API_KEYS` env var are seeded on first startup when the 
 
 Alert rules fire on verdict events. Each rule specifies a trigger (`CONTRADICTED`, `TAMPERED`, `UNVERIFIED`, or `ANY`) and a delivery channel:
 
+![Slack alert channel receiving CONTRADICTED verdicts in real time](docs/slack-alerts.png)
+
+![Email alert for a CONTRADICTED session — includes session ID, tool, receipt ID, and HMAC signature](docs/email-alert.png)
+
 - **Webhook** — POST a JSON payload to a URL
 - **Email** — SMTP/STARTTLS delivery (Gmail App Passwords, Alertmanager, etc.)
 - **Slack** — POST to an Incoming Webhook URL with Block Kit formatting
@@ -232,6 +236,8 @@ See [`receipts_mcp/upstreams.json.example`](receipts_mcp/upstreams.json.example)
 ```
 
 ### Claude Code / Cursor config
+
+![Receipts MCP server connected in Cursor — write_file, http_fetch, db_query tools visible](docs/cursor-mcp.png)
 
 ```json
 {

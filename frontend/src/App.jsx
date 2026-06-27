@@ -131,18 +131,22 @@ function JsonHighlight({ obj }) {
 
 // ── sidebar ───────────────────────────────────────────────────────────────────
 const NAV_ITEMS = [
-  { id: 'ledger',         label: 'LIVE_LEDGER' },
-  { id: 'sessions',       label: 'SESSIONS' },
-  { id: 'reconciliation', label: 'RECONCILIATION' },
-  { id: 'alerts',         label: 'ALERTS' },
-  { id: 'help',           label: 'HELP' },
-  { id: 'settings',       label: 'SETTINGS' },
+  { id: 'ledger',         label: 'LIVE_LEDGER',     symbol: '≡' },
+  { id: 'sessions',       label: 'SESSIONS',         symbol: '◎' },
+  { id: 'reconciliation', label: 'RECONCILIATION',   symbol: '⊕' },
+  { id: 'alerts',         label: 'ALERTS',           symbol: '◉' },
+  { id: 'help',           label: 'HELP',             symbol: '?' },
+  { id: 'settings',       label: 'SETTINGS',         symbol: '⊙' },
 ]
 
-function Sidebar({ view, setView, proxyOnline, onReport }) {
+const SIDEBAR_W     = 220
+const SIDEBAR_W_COL = 48
+
+function Sidebar({ view, setView, proxyOnline, onReport, collapsed, onToggle }) {
+  const w = collapsed ? SIDEBAR_W_COL : SIDEBAR_W
   return (
     <aside style={{
-      width: 220,
+      width: w,
       flexShrink: 0,
       background: SURF,
       borderRight: `1px solid ${BORDER}`,
@@ -152,18 +156,59 @@ function Sidebar({ view, setView, proxyOnline, onReport }) {
       position: 'fixed',
       top: 0, left: 0,
       zIndex: 20,
+      transition: 'width 0.18s ease',
+      overflow: 'hidden',
     }}>
-      {/* wordmark */}
-      <div style={{ padding: '20px 18px 16px', borderBottom: `1px solid ${BORDER}` }}>
-        <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: TEXT, marginBottom: 3 }}>
-          RECEIPTS
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Dot color={proxyOnline ? GREEN : RED} />
-          <span style={{ fontFamily: MONO, fontSize: 9, color: proxyOnline ? GREEN : RED, letterSpacing: '0.1em' }}>
-            {proxyOnline ? 'ONLINE' : 'OFFLINE'}
-          </span>
-        </div>
+      {/* wordmark + toggle */}
+      <div style={{
+        padding: collapsed ? '18px 0' : '20px 18px 16px',
+        borderBottom: `1px solid ${BORDER}`,
+        display: 'flex',
+        alignItems: collapsed ? 'center' : 'flex-start',
+        flexDirection: collapsed ? 'column' : 'row',
+        justifyContent: collapsed ? 'center' : 'space-between',
+        gap: collapsed ? 8 : 0,
+      }}>
+        {!collapsed && (
+          <div>
+            <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: '0.14em', color: TEXT, marginBottom: 3 }}>
+              RECEIPTS
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Dot color={proxyOnline ? GREEN : RED} />
+              <span style={{ fontFamily: MONO, fontSize: 9, color: proxyOnline ? GREEN : RED, letterSpacing: '0.1em' }}>
+                {proxyOnline ? 'ONLINE' : 'OFFLINE'}
+              </span>
+            </div>
+          </div>
+        )}
+        {collapsed && <Dot color={proxyOnline ? GREEN : RED} />}
+        {/* collapse / expand toggle */}
+        <button
+          onClick={onToggle}
+          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          style={{
+            background: 'transparent',
+            border: `1px solid ${BORDER}`,
+            borderRadius: 2,
+            color: DIM,
+            fontFamily: MONO,
+            fontSize: 11,
+            width: 22,
+            height: 22,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            flexShrink: 0,
+            padding: 0,
+            lineHeight: 1,
+          }}
+          onMouseEnter={e => { e.currentTarget.style.color = TEXT; e.currentTarget.style.borderColor = BLUE }}
+          onMouseLeave={e => { e.currentTarget.style.color = DIM; e.currentTarget.style.borderColor = BORDER }}
+        >
+          {collapsed ? '›' : '‹'}
+        </button>
       </div>
 
       {/* nav */}
@@ -172,49 +217,53 @@ function Sidebar({ view, setView, proxyOnline, onReport }) {
           <button
             key={item.id}
             onClick={() => setView(item.id)}
+            title={collapsed ? item.label : undefined}
             style={{
               display: 'flex',
               alignItems: 'center',
+              justifyContent: collapsed ? 'center' : 'flex-start',
               width: '100%',
-              padding: '8px 18px',
+              padding: collapsed ? '9px 0' : '8px 18px',
               background: view === item.id ? SURF2 : 'transparent',
               border: 'none',
               borderLeft: view === item.id ? `2px solid ${BLUE}` : '2px solid transparent',
               color: view === item.id ? TEXT : DIM,
               fontFamily: MONO,
-              fontSize: 11,
-              letterSpacing: '0.06em',
+              fontSize: collapsed ? 14 : 11,
+              letterSpacing: collapsed ? 0 : '0.06em',
               cursor: 'pointer',
               textAlign: 'left',
               transition: 'background 0.15s, color 0.15s',
             }}
           >
-            {item.label}
+            {collapsed ? item.symbol : item.label}
           </button>
         ))}
       </nav>
 
       {/* generate report */}
-      <div style={{ padding: '12px 14px', borderTop: `1px solid ${BORDER}` }}>
+      <div style={{ padding: collapsed ? '12px 8px' : '12px 14px', borderTop: `1px solid ${BORDER}` }}>
         <button
           onClick={onReport}
+          title={collapsed ? 'GEN_REPORT' : undefined}
           style={{
             width: '100%',
-            padding: '7px 12px',
+            padding: collapsed ? '7px 0' : '7px 12px',
             background: 'transparent',
             border: `1px solid ${BORDER2}`,
             borderRadius: 2,
             color: DIM,
             fontFamily: MONO,
-            fontSize: 10,
-            letterSpacing: '0.1em',
+            fontSize: collapsed ? 13 : 10,
+            letterSpacing: collapsed ? 0 : '0.1em',
             cursor: 'pointer',
             transition: 'border-color 0.15s, color 0.15s',
+            textAlign: 'center',
           }}
           onMouseEnter={e => { e.currentTarget.style.borderColor = BLUE; e.currentTarget.style.color = TEXT }}
           onMouseLeave={e => { e.currentTarget.style.borderColor = BORDER2; e.currentTarget.style.color = DIM }}
         >
-          GEN_REPORT
+          {collapsed ? '↓' : 'GEN_REPORT'}
         </button>
       </div>
     </aside>
@@ -2346,6 +2395,7 @@ export default function App() {
   const [toast, setToast]             = useState(null)
   const [showFullHashes, setShowFullHashes] = useState(false)
   const [reconcileSession, setReconcileSession] = useState(null)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
 
   // poll proxy status every 5s
   useEffect(() => {
@@ -2395,9 +2445,11 @@ export default function App() {
         setView={switchView}
         proxyOnline={proxyOnline}
         onReport={() => generateReport(setToast)}
+        collapsed={sidebarCollapsed}
+        onToggle={() => setSidebarCollapsed(c => !c)}
       />
 
-      <div style={{ marginLeft: 220, flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ marginLeft: sidebarCollapsed ? SIDEBAR_W_COL : SIDEBAR_W, flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', transition: 'margin-left 0.18s ease' }}>
         <Header view={view} proxyOnline={proxyOnline} />
 
         <main

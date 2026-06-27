@@ -39,6 +39,7 @@ from database import (
     get_session,
     update_alert_rule,
     upsert_session,
+    create_empty_session,
     close_session,
     get_open_sessions_older_than,
     update_session_verdict,
@@ -241,6 +242,13 @@ def verify(req: VerifyRequest, background_tasks: BackgroundTasks = None, _auth: 
 @app.get("/sessions", response_model=list[SessionResponse])
 def list_sessions(limit: int = 50, _auth: dict = Depends(require_viewer)):
     return get_all_sessions(limit)
+
+
+@app.post("/sessions/{session_id}")
+def create_session_endpoint(session_id: str, _auth: dict = Depends(require_proxy)):
+    """Create an empty session with no receipts. Used by agents that may not call any tools."""
+    created = create_empty_session(session_id)
+    return {"session_id": session_id, "created": created}
 
 
 @app.get("/sessions/{session_id}", response_model=SessionResponse)

@@ -240,6 +240,25 @@ def upsert_session(session_id: str) -> bool:
         return False
 
 
+def create_empty_session(session_id: str) -> bool:
+    """Create a session with zero receipts. Returns True if created, False if already exists."""
+    now = _now()
+    with get_connection() as conn:
+        existing = conn.execute(
+            "SELECT session_id FROM sessions WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        if existing is not None:
+            return False
+        conn.execute(
+            """INSERT INTO sessions
+               (session_id, created_at, last_activity, status, receipt_count)
+               VALUES (?, ?, ?, 'open', 0)""",
+            (session_id, now, now),
+        )
+        conn.commit()
+        return True
+
+
 def close_session(session_id: str) -> dict | None:
     """Mark a session closed. Returns the updated session row or None."""
     now = _now()

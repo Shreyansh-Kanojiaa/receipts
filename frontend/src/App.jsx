@@ -1590,13 +1590,13 @@ function ReconciliationView({ initialSession, onClearInitial }) {
               onClick={copyResult}
               style={{
                 padding: '3px 10px', background: 'transparent',
-                border: `1px solid ${BORDER2}`, borderRadius: 2,
-                color: copied ? GREEN : DIM,
+                border: `1px solid ${copied ? GREEN : BLUE}`, borderRadius: 2,
+                color: copied ? GREEN : BLUE,
                 fontFamily: MONO, fontSize: 10, letterSpacing: '0.08em', cursor: 'pointer', flexShrink: 0,
-                transition: 'color 0.15s',
+                transition: 'color 0.15s, border-color 0.15s',
               }}
             >
-              {copied ? 'COPIED' : 'EXPORT_JSON'}
+              {copied ? 'COPIED' : 'COPY_JSON'}
             </button>
           </div>
         </div>

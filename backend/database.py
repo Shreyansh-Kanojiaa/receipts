@@ -66,10 +66,11 @@ def init_db() -> None:
                 auto_verdict        TEXT,
                 auto_verified_at    TEXT,
                 receipt_count       INTEGER DEFAULT 0,
-                verification_scope  TEXT
+                verification_scope  TEXT,
+                full_claim_verdicts TEXT
             )
         """)
-        for col in ("verification_scope TEXT",):
+        for col in ("verification_scope TEXT", "full_claim_verdicts TEXT"):
             try:
                 conn.execute(f"ALTER TABLE sessions ADD COLUMN {col}")
             except Exception:
@@ -255,13 +256,23 @@ def close_session(session_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def _deserialize_session(row: dict) -> dict:
+    import json as _json
+    if isinstance(row.get("full_claim_verdicts"), str):
+        try:
+            row["full_claim_verdicts"] = _json.loads(row["full_claim_verdicts"])
+        except Exception:
+            row["full_claim_verdicts"] = None
+    return row
+
+
 def get_session(session_id: str) -> dict | None:
     with get_connection() as conn:
         row = conn.execute(
             "SELECT * FROM sessions WHERE session_id = ?",
             (session_id,),
         ).fetchone()
-    return dict(row) if row else None
+    return _deserialize_session(dict(row)) if row else None
 
 
 def get_open_sessions_older_than(seconds: int) -> list[dict]:
@@ -274,14 +285,17 @@ def get_open_sessions_older_than(seconds: int) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-def update_session_verdict(session_id: str, verdict: str, verified_at: str, scope: str = "signature_only") -> None:
+def update_session_verdict(
+    session_id: str, verdict: str, verified_at: str,
+    scope: str = "signature_only", verdicts_json: str | None = None,
+) -> None:
     with get_connection() as conn:
         conn.execute(
             """UPDATE sessions
                SET auto_verdict = ?, auto_verified_at = ?, status = 'verified',
-                   verification_scope = ?
+                   verification_scope = ?, full_claim_verdicts = ?
                WHERE session_id = ?""",
-            (verdict, verified_at, scope, session_id),
+            (verdict, verified_at, scope, verdicts_json, session_id),
         )
         conn.commit()
 
@@ -301,7 +315,7 @@ def get_all_sessions(limit: int = 50) -> list[dict]:
             "SELECT * FROM sessions ORDER BY last_activity DESC LIMIT ?",
             (limit,),
         ).fetchall()
-    return [dict(row) for row in rows]
+    return [_deserialize_session(dict(row)) for row in rows]
 
 
 # ── stats ─────────────────────────────────────────────────────────────────────

@@ -81,6 +81,7 @@ class SessionResponse(BaseModel):
     auto_verified_at: str | None = None
     receipt_count: int
     verification_scope: str | None = None  # 'signature_only' | 'full_claim' | None
+    full_claim_verdicts: list | None = None
 
 
 class CloseSessionResponse(BaseModel):

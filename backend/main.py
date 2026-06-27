@@ -309,7 +309,8 @@ def verify_claim(
     verdict  = derive_verdict(verdicts)
 
     now = datetime.now(timezone.utc).isoformat()
-    update_session_verdict(session_id, verdict, now, scope="full_claim")
+    verdicts_json = json.dumps([v.model_dump() for v in verdicts])
+    update_session_verdict(session_id, verdict, now, scope="full_claim", verdicts_json=verdicts_json)
 
     verdict_by_id = {v.receipt_id: v for v in verdicts}
     for v_obj in verdicts:
@@ -508,7 +509,8 @@ def demo_run(mode: str = "normal", background_tasks: BackgroundTasks = None, _au
         verdict = "UNVERIFIED"
 
     now = datetime.now(timezone.utc).isoformat()
-    update_session_verdict(session_id, verdict, now, scope="full_claim")
+    verdicts_json = json.dumps([v.model_dump() for v in verdicts])
+    update_session_verdict(session_id, verdict, now, scope="full_claim", verdicts_json=verdicts_json)
 
     if receipts_stored and verdict != "VERIFIED":
         verdict_by_id = {v.receipt_id: v for v in verdicts}

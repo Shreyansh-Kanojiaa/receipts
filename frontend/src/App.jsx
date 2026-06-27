@@ -1157,7 +1157,9 @@ function ReconciliationView({ initialSession, onClearInitial }) {
     }
   }
 
-  // Show the verdict already on record (no verify-claim call) using stored receipts.
+  // Show the verdict already on record (no verify-claim call).
+  // Uses full_claim_verdicts from the session when available (they carry claimed tool names
+  // and hashes from the original agent report), falling back to synthesizing from receipts.
   async function showStoredVerdict(s) {
     setLoading(true)
     setError(null)
@@ -1168,10 +1170,17 @@ function ReconciliationView({ initialSession, onClearInitial }) {
         return r.json()
       })
       const verdictMap = {}
-      rr.forEach(r => {
-        const v = storedVerdictObj(r)
-        if (v) verdictMap[r.id] = v
-      })
+      // Prefer stored full_claim_verdicts — they contain the agent's claimed tool_name,
+      // claimed_hash, actual_hash, and reason, which power the CONTRADICTED diff rows.
+      const storedVerdicts = Array.isArray(s.full_claim_verdicts) ? s.full_claim_verdicts : null
+      if (storedVerdicts) {
+        storedVerdicts.forEach(v => { verdictMap[v.receipt_id] = v })
+      } else {
+        rr.forEach(r => {
+          const v = storedVerdictObj(r)
+          if (v) verdictMap[r.id] = v
+        })
+      }
       setResult({
         verdict:      s.auto_verdict,
         verdicts:     Object.values(verdictMap),
@@ -1230,12 +1239,8 @@ function ReconciliationView({ initialSession, onClearInitial }) {
       // a circular re-run (only happens when force was not requested).
       if (verData.already_verified) {
         const s = sessions.find(x => x.session_id === sessionId)
-        await showStoredVerdict({
-          session_id: sessionId,
-          auto_verdict: verData.verdict,
-          auto_verified_at: s?.auto_verified_at,
-          verification_scope: 'full_claim',
-        })
+        // Pass the full session object so showStoredVerdict can use full_claim_verdicts.
+        if (s) await showStoredVerdict(s)
         return
       }
 

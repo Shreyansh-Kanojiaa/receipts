@@ -38,6 +38,9 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
+# Or install just the MCP proxy from PyPI
+pip install receipts-mcp
+
 # 2. Start the backend in development mode
 cd backend
 RECEIPT_SECRET=dev-secret \
@@ -195,6 +198,10 @@ python3 demo_agent.py --mode replit
 The demo agent uses `RECEIPTS_URL` (default `http://localhost:8000`) and `RECEIPTS_API_KEY` (default `devproxy`).
 
 ## MCP proxy
+
+```bash
+pip install receipts-mcp
+```
 
 `receipts_mcp/` is a stdio MCP server that aggregates upstream MCP servers, namespaces tools as `<server>__<tool>`, forwards calls to the real upstream, and posts the real output to `/tools/record`.
 

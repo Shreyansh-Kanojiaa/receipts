@@ -1,0 +1,2 @@
+include receipts_mcp/upstreams.json.example
+include receipts_mcp/README.md

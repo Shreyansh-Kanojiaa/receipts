@@ -36,7 +36,10 @@ def print_json(label, value):
 def verify(session_id, claimed_outputs):
     print("\nAgent: submitting its claimed tool outputs for independent verification...")
     payload = {"session_id": session_id, "claimed_outputs": claimed_outputs}
-    result = post("/verify", payload)
+    # Use verify-claim (not /verify) so the verdict is persisted to the session with
+    # verification_scope='full_claim'. The Reconciliation view detects this and shows
+    # the stored verdict rather than re-running with stored receipts (which would be circular).
+    result = post(f"/sessions/{session_id}/verify-claim", payload)
     print_json("Verifier response:", result)
     return result
 

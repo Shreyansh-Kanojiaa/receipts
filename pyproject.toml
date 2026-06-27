@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "receipts-mcp"
+version = "0.1.0"
+description = "MCP proxy that records and cryptographically signs AI agent tool calls"
+readme = "receipts_mcp/README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Shreyansh", email = "shreyanshkanojia104@gmail.com" }]
+dependencies = [
+    "mcp>=1.0.0",
+    "httpx>=0.27.0",
+    "pydantic-settings>=2.2.0",
+]
+
+[project.scripts]
+receipts-mcp = "receipts_mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/Shreyansh-Kanojiaa/receipts"
+
+[tool.setuptools.packages.find]
+include = ["receipts_mcp*"]
+
+[tool.setuptools.package-data]
+receipts_mcp = ["upstreams.json.example"]

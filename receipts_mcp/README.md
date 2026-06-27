@@ -23,7 +23,7 @@ Those demo tools are forwarded to the backend's `/tools/call` endpoint.
 ## Setup
 
 ```bash
-pip install -r ../requirements.txt
+pip install receipts-mcp
 cp upstreams.json.example upstreams.json
 ```
 

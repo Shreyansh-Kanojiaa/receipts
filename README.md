@@ -112,6 +112,7 @@ Important ones:
 | `POST /verify` | proxy | compare claimed outputs against stored receipts |
 | `GET /sessions` | viewer | list sessions |
 | `GET /sessions/{id}` | viewer | session detail |
+| `POST /sessions/{id}` | proxy | create an empty session (for agents that may call no tools) |
 | `POST /sessions/{id}/close` | proxy | close a session and schedule auto-verify |
 | `POST /sessions/{id}/verify-claim` | proxy | full-claim reconciliation with verdict persistence |
 | `GET /receipts/all` | viewer | all receipts (paginated by limit) |
@@ -250,19 +251,18 @@ See [`receipts_mcp/upstreams.json.example`](receipts_mcp/upstreams.json.example)
 {
   "mcpServers": {
     "receipts": {
-      "command": "/home/shreyansh/receipts/.venv/bin/python3",
-      "args": ["-m", "receipts_mcp.server"],
-      "cwd": "/home/shreyansh/receipts",
+      "command": "python3",
+      "args": ["-m", "receipts_mcp"],
       "env": {
         "RECEIPTS_URL": "http://localhost:8000",
-        "RECEIPTS_API_KEY": "<proxy-key>",
-        "UPSTREAMS_PATH": "receipts_mcp/upstreams.json",
-        "PYTHONPATH": "/home/shreyansh/receipts"
+        "RECEIPTS_API_KEY": "<proxy-key>"
       }
     }
   }
 }
 ```
+
+To use real upstream MCP servers instead of the built-in demo tools, also set `UPSTREAMS_PATH` to your `upstreams.json` config file.
 
 ### Proxy settings
 

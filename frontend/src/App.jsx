@@ -960,7 +960,7 @@ function ReconcileVerdictBanner({ verdict }) {
   const cfg = {
     VERIFIED:     { color: GREEN, bg: 'rgba(34,197,94,0.06)',   border: 'rgba(34,197,94,0.2)',   left: GREEN, text: 'ALL CLAIMS MATCH CRYPTOGRAPHIC RECEIPTS' },
     UNVERIFIED:   { color: RED,   bg: 'rgba(239,68,68,0.06)',   border: 'rgba(239,68,68,0.2)',   left: RED,   text: 'NO RECEIPTS FOUND — AGENT MADE CLAIMS WITHOUT EXECUTING TOOLS' },
-    CONTRADICTED: { color: AMBER, bg: 'rgba(245,158,11,0.06)',  border: 'rgba(245,158,11,0.2)',  left: AMBER, text: 'CLAIM MISMATCH — AGENT REPORTED OUTPUTS THAT DIFFER FROM LEDGER' },
+    CONTRADICTED: { color: AMBER, bg: 'rgba(245,158,11,0.06)',  border: 'rgba(245,158,11,0.2)',  left: AMBER, text: 'CLAIM MISMATCH — AGENT REPORTED OUTPUTS THAT DIFFER FROM LEDGER. SEE DIFF BELOW.' },
     TAMPERED:     { color: RED,   bg: 'rgba(239,68,68,0.06)',   border: 'rgba(239,68,68,0.2)',   left: RED,   text: 'SIGNATURE INVALID — RECEIPT WAS MODIFIED AFTER EXECUTION' },
   }
   const s = cfg[verdict] ?? cfg.UNVERIFIED
@@ -986,15 +986,19 @@ function ReceiptCard({ receipt: r, verdict: v }) {
     v.signature_valid === false ? 'TAMPERED' :
     v.verified      ? 'VERIFIED' : 'CONTRADICTED'
 
+  const isContradicted = cardVerdict === 'CONTRADICTED'
+  const toolMismatch   = isContradicted && v?.tool_name !== r.tool_name
+  const hashMismatch   = isContradicted && v?.claimed_hash && v?.actual_hash && v.claimed_hash !== v.actual_hash
+
   const rows = [
-    { field: 'tool_name',      actual: r.tool_name,  match: true },
+    { field: 'tool_name',      actual: r.tool_name,  match: !toolMismatch },
     { field: 'output_hash',    actual: r.output_hash ? r.output_hash.slice(0, 16) + '...' : '—', match: v ? (v.claimed_hash === v.actual_hash) : true },
     { field: 'hmac_signature', actual: v?.signature_valid === false ? 'Invalid' : 'Valid', color: v?.signature_valid === false ? RED : GREEN, match: v ? v.signature_valid !== false : true },
     { field: 'executed_at',    actual: r.timestamp, match: true },
   ]
 
   return (
-    <div style={{ border: `1px solid ${BORDER}`, borderRadius: 2, overflow: 'hidden' }}>
+    <div style={{ border: `1px solid ${isContradicted ? 'rgba(245,158,11,0.35)' : BORDER}`, borderRadius: 2, overflow: 'hidden' }}>
       {/* card header */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 12,
@@ -1007,6 +1011,55 @@ function ReceiptCard({ receipt: r, verdict: v }) {
           : <span style={{ fontFamily: MONO, fontSize: 11, color: DIM }}>PENDING</span>
         }
       </div>
+
+      {/* CONTRADICTED diff — claim vs. ledger side-by-side */}
+      {isContradicted && (
+        <div style={{ borderBottom: `1px solid ${BORDER}` }}>
+          {/* diff header */}
+          <div style={{
+            display: 'grid', gridTemplateColumns: '18% 1fr 1fr',
+            padding: '5px 16px', background: 'rgba(245,158,11,0.06)',
+            fontSize: 9, fontFamily: MONO, color: DIM, letterSpacing: '0.12em',
+            borderBottom: `1px solid ${BORDER}`,
+          }}>
+            <span>FIELD</span>
+            <span style={{ color: RED }}>AGENT CLAIMED</span>
+            <span style={{ color: GREEN }}>LEDGER RECORDED</span>
+          </div>
+          {/* tool_name diff row */}
+          {toolMismatch && (
+            <div style={{
+              display: 'grid', gridTemplateColumns: '18% 1fr 1fr',
+              padding: '8px 16px', background: 'rgba(239,68,68,0.05)',
+              borderBottom: `1px solid ${BORDER}`,
+              fontSize: 11, fontFamily: MONO, alignItems: 'center',
+            }}>
+              <span style={{ color: DIM, fontSize: 10, letterSpacing: '0.06em' }}>tool_name</span>
+              <span style={{ color: RED }}>{v.tool_name}</span>
+              <span style={{ color: GREEN }}>{r.tool_name}</span>
+            </div>
+          )}
+          {/* output_hash diff row */}
+          {hashMismatch && (
+            <div style={{
+              display: 'grid', gridTemplateColumns: '18% 1fr 1fr',
+              padding: '8px 16px', background: 'rgba(239,68,68,0.05)',
+              fontSize: 11, fontFamily: MONO, alignItems: 'center',
+            }}>
+              <span style={{ color: DIM, fontSize: 10, letterSpacing: '0.06em' }}>output_hash</span>
+              <span style={{ color: RED, wordBreak: 'break-all' }}>{v.claimed_hash.slice(0, 16)}...</span>
+              <span style={{ color: GREEN, wordBreak: 'break-all' }}>{v.actual_hash.slice(0, 16)}...</span>
+            </div>
+          )}
+          {/* reason label */}
+          <div style={{ padding: '5px 16px', background: 'rgba(245,158,11,0.04)', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontFamily: MONO, fontSize: 9, color: DIM, letterSpacing: '0.1em' }}>REASON</span>
+            <span style={{ fontFamily: MONO, fontSize: 10, color: AMBER, letterSpacing: '0.04em' }}>
+              {v?.reason ?? 'contradicted'}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* column headers */}
       <div style={{

@@ -75,14 +75,14 @@ Add this to `~/.claude/claude_mcp_config.json` or the equivalent Cursor MCP conf
 {
   "mcpServers": {
     "receipts": {
-      "command": "/home/shreyansh/receipts/.venv/bin/python3",
+      "command": "/path/to/receipts/.venv/bin/python3",
       "args": ["-m", "receipts_mcp.server"],
-      "cwd": "/home/shreyansh/receipts",
+      "cwd": "/path/to/receipts",
       "env": {
         "RECEIPTS_URL": "http://localhost:8000",
         "RECEIPTS_API_KEY": "<proxy-key>",
         "UPSTREAMS_PATH": "receipts_mcp/upstreams.json",
-        "PYTHONPATH": "/home/shreyansh/receipts"
+        "PYTHONPATH": "/path/to/receipts"
       }
     }
   }

@@ -12,6 +12,7 @@ Env vars are read un-prefixed by field name (uppercased): ``ENVIRONMENT``,
 ``RECEIPT_SECRET``, ``DATABASE_URL``, ``CORS_ORIGINS``, ``API_KEYS``, etc.
 """
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -30,7 +31,9 @@ class Settings(BaseSettings):
 
     # ── environment ──────────────────────────────────────────────────────────
     # "development" | "production". Drives secret fail-fast and CORS defaults.
-    environment: str = "development"
+    # A Literal so a typo (e.g. "prod") fails fast at startup instead of silently
+    # falling back to the insecure dev signing key in what is really production.
+    environment: Literal["development", "production"] = "development"
 
     # ── signing ──────────────────────────────────────────────────────────────
     # Maps to the existing RECEIPT_SECRET env var (no RECEIPTS_ prefix) for

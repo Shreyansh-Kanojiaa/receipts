@@ -51,7 +51,7 @@ Receipts is an audit layer for AI tool use.
 - `frontend/src/index.css` — CSS variables, keyframe animations (row-highlight, pill-in, view transitions, toast, skeleton-pulse, spin), reduced-motion media query
 - `frontend/src/App.css` — legacy Vite scaffold styles (unused by dashboard)
 - `frontend/nginx.conf` — production SPA + API reverse proxy; envsubst injects `${BACKEND_HOST}` and `${PROXY_KEY}` at container start
-- `frontend/vite.config.js` — dev proxy rules for `/demo`, `/tools`, `/receipts`, `/verify`, `/stats`, `/sessions`, `/alerts`
+- `frontend/vite.config.js` — dev proxy rules for `/demo`, `/tools`, `/receipts`, `/verify`, `/stats`, `/sessions`, `/alerts`, `/api-keys`
 - `frontend/Dockerfile` — Node 20 build stage → nginx 1.27 serve stage
 
 ### MCP proxy
@@ -144,8 +144,10 @@ docker compose up --build
   - `/stats`
   - `/alerts`, `/alerts/{id}`, `/alerts/{id}/test`
   - `/demo/run`
+  - `/api-keys`, `/api-keys/{id}/revoke` (admin-only)
   - `/healthz` and `/readyz`
-- API keys are stored hashed only. Bootstrap keys come from `API_KEYS`.
+- API keys are stored hashed only. Bootstrap keys come from `API_KEYS`. Revocation
+  (`/api-keys/{id}/revoke`) sets `revoked_at`; revoked keys are rejected at auth time.
 - The background timeout loop closes stale sessions after `INACTIVITY_TIMEOUT_SECONDS` (default 30s) of inactivity.
 - `auto_verify()` is signature-only and should not stamp intact receipts as verified rows (only tampered rows get a verdict written).
 - `auto_verify()` skips sessions with an existing `full_claim` verdict to avoid overwriting richer verdicts.

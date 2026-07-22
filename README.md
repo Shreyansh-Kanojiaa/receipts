@@ -125,6 +125,8 @@ Important ones:
 | `DELETE /alerts/{id}` | proxy | delete an alert rule |
 | `POST /alerts/{id}/test` | proxy | send a test alert |
 | `POST /demo/run` | proxy | run a built-in demo scenario |
+| `GET /api-keys` | admin | list API keys (labels/roles only, never raw keys or hashes) |
+| `POST /api-keys/{id}/revoke` | admin | revoke an API key |
 | `GET /healthz` | none | liveness probe |
 | `GET /readyz` | none | readiness probe (checks DB) |
 

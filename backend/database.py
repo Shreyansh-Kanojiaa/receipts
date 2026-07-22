@@ -139,6 +139,25 @@ def count_api_keys() -> int:
         return conn.execute("SELECT COUNT(*) AS n FROM api_keys").fetchone()["n"]
 
 
+def list_api_keys() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, label, role, created_at, revoked_at FROM api_keys ORDER BY created_at DESC"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def revoke_api_key(key_id: str) -> bool:
+    now = _now()
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+            (now, key_id),
+        )
+        conn.commit()
+    return cursor.rowcount > 0
+
+
 # ── receipts ──────────────────────────────────────────────────────────────────
 
 def insert_receipt(receipt: dict) -> None:

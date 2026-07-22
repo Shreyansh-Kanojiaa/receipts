@@ -4,7 +4,6 @@ This only detects TAMPERED (signature mismatch) or VERIFIED (all intact).
 It cannot detect CONTRADICTED or UNVERIFIED because those require the agent's
 original claimed output — which is only available in manual reconciliation.
 """
-import asyncio
 from datetime import datetime, timezone
 
 from database import (
@@ -14,7 +13,7 @@ from database import (
     update_session_status,
     update_receipt_verdict,
 )
-from signer import verify_receipt_signature
+from signer import verify_receipt_signature, verify_receipt_content
 from logging_config import get_logger
 from alerts import fire_alerts
 
@@ -49,7 +48,10 @@ async def auto_verify(session_id: str) -> str | None:
         )
         return None
 
-    tampered = [r for r in receipts if not verify_receipt_signature(r)]
+    tampered = [
+        r for r in receipts
+        if not verify_receipt_signature(r) or not verify_receipt_content(r)
+    ]
 
     # Record the per-receipt verdict for tampered rows so the ledger and the
     # tamper_alerts stat reflect tampering caught on this signature-only path.
@@ -57,7 +59,7 @@ async def auto_verify(session_id: str) -> str | None:
     # agent's *claim* was correct, so we don't write 'VERIFIED' here.
     for r in tampered:
         update_receipt_verdict(r["id"], "TAMPERED")
-        asyncio.create_task(fire_alerts("TAMPERED", session_id, r))
+        await fire_alerts("TAMPERED", session_id, r)
 
     verdict = "TAMPERED" if tampered else "VERIFIED"
     now = datetime.now(timezone.utc).isoformat()

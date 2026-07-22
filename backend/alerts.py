@@ -9,6 +9,9 @@ from email.mime.text import MIMEText
 import httpx
 
 from database import get_enabled_rules_for_verdict
+from logging_config import get_logger
+
+logger = get_logger("receipts.alerts")
 
 
 async def fire_alerts(verdict: str, session_id: str, receipt: dict) -> None:
@@ -23,15 +26,19 @@ async def fire_alerts(verdict: str, session_id: str, receipt: dict) -> None:
                 await send_email(rule, config, verdict, session_id, receipt)
             elif rule["channel"] == "slack":
                 await send_slack(rule, config, verdict, session_id, receipt)
-        except Exception as e:
-            print(f"[ALERT] Failed to fire rule {rule['id']}: {e}")
+        except Exception:
+            logger.exception(
+                "alert delivery failed",
+                extra={"rule_id": rule["id"], "channel": rule["channel"], "verdict": verdict, "session_id": session_id},
+            )
 
 
 async def send_webhook(rule, config, verdict, session_id, receipt):
     payload = build_alert_payload(verdict, session_id, receipt)
     async with httpx.AsyncClient(timeout=10) as client:
-        await client.post(config["url"], json=payload)
-    print(f"[ALERT] Webhook fired: {config['url']} → {verdict}")
+        resp = await client.post(config["url"], json=payload)
+        resp.raise_for_status()
+    logger.info("webhook alert fired", extra={"url": config["url"], "verdict": verdict})
 
 
 async def send_email(rule, config, verdict, session_id, receipt):
@@ -48,7 +55,7 @@ async def send_email(rule, config, verdict, session_id, receipt):
         None,
         lambda: _send_smtp(config, msg),
     )
-    print(f"[ALERT] Email sent to {config['to']} → {verdict}")
+    logger.info("email alert sent", extra={"to": config["to"], "verdict": verdict})
 
 
 def _send_smtp(config, msg):
@@ -86,8 +93,9 @@ async def send_slack(rule, config, verdict, session_id, receipt):
         ],
     }
     async with httpx.AsyncClient(timeout=10) as client:
-        await client.post(config["webhook_url"], json=payload)
-    print(f"[ALERT] Slack fired → {verdict}")
+        resp = await client.post(config["webhook_url"], json=payload)
+        resp.raise_for_status()
+    logger.info("slack alert fired", extra={"verdict": verdict})
 
 
 def build_alert_payload(verdict, session_id, receipt):

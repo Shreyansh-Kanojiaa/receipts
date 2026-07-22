@@ -36,6 +36,20 @@ def verify_receipt_signature(receipt: dict) -> bool:
     )
 
 
+def verify_receipt_content(receipt: dict) -> bool:
+    """Return whether the stored raw tool_input/tool_output still hash to the
+    stored input_hash/output_hash columns.
+
+    The HMAC only covers the hash columns, not the raw payload (see sign_receipt),
+    so a direct edit to the raw tool_input/tool_output blobs that leaves the hash
+    columns untouched passes verify_receipt_signature. This catches that case.
+    """
+    return (
+        hash_dict(receipt["tool_input"]) == receipt["input_hash"]
+        and hash_dict(receipt["tool_output"]) == receipt["output_hash"]
+    )
+
+
 def build_receipt(
     session_id: str,
     tool_name: str,

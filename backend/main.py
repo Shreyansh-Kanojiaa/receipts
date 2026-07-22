@@ -14,10 +14,12 @@ from models import (
     AlertRuleCreate,
     AlertRuleResponse,
     AlertRuleUpdate,
+    ApiKeyResponse,
     ClaimedOutput,
     CloseSessionResponse,
     DemoRunResponse,
     ReceiptResponse,
+    RevokeApiKeyResponse,
     SessionResponse,
     ToolCallRequest,
     ToolRecordRequest,
@@ -37,6 +39,8 @@ from database import (
     get_stats,
     get_all_sessions,
     get_session,
+    list_api_keys,
+    revoke_api_key,
     update_alert_rule,
     upsert_session,
     create_empty_session,
@@ -49,7 +53,7 @@ from signer import build_receipt
 from verifier import run_verify, derive_verdict
 from auto_verify import auto_verify
 from alerts import fire_alerts, build_alert_payload
-from auth import require_viewer, require_proxy, seed_api_keys
+from auth import require_viewer, require_proxy, require_admin, seed_api_keys
 from settings import get_settings
 from logging_config import configure_logging, get_logger
 
@@ -231,9 +235,8 @@ def verify(req: VerifyRequest, background_tasks: BackgroundTasks = None, _auth: 
         for v_obj in verdicts:
             r_verdict = _verdict_str(v_obj)
             if r_verdict != "VERIFIED":
-                receipt = get_receipt_for_session(v_obj.receipt_id, req.session_id)
-                if receipt:
-                    background_tasks.add_task(fire_alerts, r_verdict, req.session_id, receipt)
+                receipt = _receipt_for_alert(v_obj.receipt_id, req.session_id, v_obj.tool_name, v_obj)
+                background_tasks.add_task(fire_alerts, r_verdict, req.session_id, receipt)
     return VerifyResponse(session_id=req.session_id, verdicts=verdicts)
 
 
@@ -320,13 +323,11 @@ def verify_claim(
     verdicts_json = json.dumps([v.model_dump() for v in verdicts])
     update_session_verdict(session_id, verdict, now, scope="full_claim", verdicts_json=verdicts_json)
 
-    verdict_by_id = {v.receipt_id: v for v in verdicts}
     for v_obj in verdicts:
         r_verdict = _verdict_str(v_obj)
         if r_verdict != "VERIFIED":
-            receipt = get_receipt_for_session(v_obj.receipt_id, session_id)
-            if receipt:
-                background_tasks.add_task(fire_alerts, r_verdict, session_id, receipt)
+            receipt = _receipt_for_alert(v_obj.receipt_id, session_id, v_obj.tool_name, v_obj)
+            background_tasks.add_task(fire_alerts, r_verdict, session_id, receipt)
 
     return VerifyResponse(session_id=session_id, verdicts=verdicts)
 
@@ -337,6 +338,33 @@ def _deserialize_rule(rule: dict) -> dict:
     if isinstance(rule.get("config"), str):
         rule["config"] = json.loads(rule["config"])
     rule["enabled"] = bool(rule["enabled"])
+    return rule
+
+
+def _redact_config(channel: str, config: dict) -> dict:
+    """Mask channel secrets before returning a rule to a viewer-role caller."""
+    redacted = dict(config)
+    if channel == "email":
+        if "smtp_pass" in redacted:
+            redacted["smtp_pass"] = "••••••••"
+        if "smtp_user" in redacted:
+            redacted["smtp_user"] = "••••••••"
+    elif channel == "webhook" and "url" in redacted:
+        redacted["url"] = _mask_url(redacted["url"])
+    elif channel == "slack" and "webhook_url" in redacted:
+        redacted["webhook_url"] = _mask_url(redacted["webhook_url"])
+    return redacted
+
+
+def _mask_url(url: str) -> str:
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}/••••••••"
+
+
+def _redact_rule(rule: dict) -> dict:
+    rule = dict(rule)
+    rule["config"] = _redact_config(rule["channel"], rule["config"])
     return rule
 
 
@@ -351,13 +379,51 @@ def _verdict_str(v) -> str:
     return "CONTRADICTED"
 
 
+def _receipt_for_alert(receipt_id: str, session_id: str, tool_name: str, v_obj) -> dict:
+    """Look up the stored receipt for an alert, falling back to a synthetic one.
+
+    An agent can claim a receipt_id that was never recorded (the "lying agent"
+    case this product exists to catch) — get_receipt_for_session then returns
+    None. Alerts must still fire for that verdict, so build a minimal stand-in
+    from the verdict itself rather than skipping delivery.
+    """
+    receipt = get_receipt_for_session(receipt_id, session_id)
+    if receipt:
+        return receipt
+    return {
+        "id": receipt_id,
+        "tool_name": tool_name,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "input_hash": None,
+        "output_hash": v_obj.claimed_hash if v_obj else None,
+        "hmac_signature": None,
+    }
+
+
+_REQUIRED_ALERT_CONFIG_KEYS = {
+    "webhook": ["url"],
+    "email":   ["smtp_host", "smtp_port", "smtp_user", "smtp_pass", "to"],
+    "slack":   ["webhook_url"],
+}
+
+
+def _validate_alert_config(channel: str, config: dict) -> None:
+    missing = [k for k in _REQUIRED_ALERT_CONFIG_KEYS[channel] if not config.get(k)]
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"channel '{channel}' config is missing required key(s): {', '.join(missing)}",
+        )
+
+
 @app.get("/alerts", response_model=list[AlertRuleResponse])
 def list_alerts(_auth: dict = Depends(require_viewer)):
-    return [_deserialize_rule(r) for r in get_alert_rules()]
+    return [_redact_rule(_deserialize_rule(r)) for r in get_alert_rules()]
 
 
 @app.post("/alerts", response_model=AlertRuleResponse, status_code=201)
 def create_alert(req: AlertRuleCreate, _auth: dict = Depends(require_proxy)):
+    _validate_alert_config(req.channel, req.config)
     rule = create_alert_rule(
         name=req.name,
         trigger=req.trigger,
@@ -372,7 +438,7 @@ def get_alert(rule_id: str, _auth: dict = Depends(require_viewer)):
     rule = get_alert_rule(rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail=f"Alert rule not found: {rule_id}")
-    return _deserialize_rule(rule)
+    return _redact_rule(_deserialize_rule(rule))
 
 
 @app.patch("/alerts/{rule_id}", response_model=AlertRuleResponse)
@@ -380,6 +446,12 @@ def update_alert(rule_id: str, req: AlertRuleUpdate, _auth: dict = Depends(requi
     rule = get_alert_rule(rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail=f"Alert rule not found: {rule_id}")
+
+    effective_channel = req.channel if req.channel is not None else rule["channel"]
+    effective_config  = req.config if req.config is not None else json.loads(rule["config"])
+    if req.channel is not None or req.config is not None:
+        _validate_alert_config(effective_channel, effective_config)
+
     kwargs = {}
     if req.name is not None:
         kwargs["name"] = req.name
@@ -431,6 +503,21 @@ async def test_alert(rule_id: str, _auth: dict = Depends(require_proxy)):
         raise HTTPException(status_code=502, detail=f"Alert delivery failed: {e}")
 
 
+# ── api keys ──────────────────────────────────────────────────────────────────
+
+@app.get("/api-keys", response_model=list[ApiKeyResponse])
+def list_keys(_auth: dict = Depends(require_admin)):
+    return list_api_keys()
+
+
+@app.post("/api-keys/{key_id}/revoke", response_model=RevokeApiKeyResponse)
+def revoke_key(key_id: str, _auth: dict = Depends(require_admin)):
+    revoked = revoke_api_key(key_id)
+    if not revoked:
+        raise HTTPException(status_code=404, detail=f"API key not found or already revoked: {key_id}")
+    return RevokeApiKeyResponse(id=key_id, revoked=True)
+
+
 # ── stats ─────────────────────────────────────────────────────────────────────
 
 @app.get("/stats")
@@ -442,6 +529,8 @@ def get_statistics(_auth: dict = Depends(require_viewer)):
 
 @app.post("/demo/run", response_model=DemoRunResponse)
 def demo_run(mode: str = "normal", background_tasks: BackgroundTasks = None, _auth: dict = Depends(require_proxy)):
+    if not settings.enable_demo_tools:
+        raise HTTPException(status_code=404, detail="Demo tools are disabled")
     if mode not in ("normal", "lying", "replit"):
         raise HTTPException(status_code=400, detail=f"Unknown mode: {mode}")
 
@@ -472,6 +561,7 @@ def demo_run(mode: str = "normal", background_tasks: BackgroundTasks = None, _au
         ]
 
     elif mode == "lying":
+        create_empty_session(session_id)
         claimed = [
             ClaimedOutput(
                 receipt_id=f"{session_id}-write-file",
@@ -520,12 +610,11 @@ def demo_run(mode: str = "normal", background_tasks: BackgroundTasks = None, _au
     verdicts_json = json.dumps([v.model_dump() for v in verdicts])
     update_session_verdict(session_id, verdict, now, scope="full_claim", verdicts_json=verdicts_json)
 
-    if receipts_stored and verdict != "VERIFIED":
-        verdict_by_id = {v.receipt_id: v for v in verdicts}
-        for receipt in receipts_stored:
-            v_obj = verdict_by_id.get(receipt["id"])
-            r_verdict = _verdict_str(v_obj) if v_obj else ("UNVERIFIED" if not receipts_stored else "CONTRADICTED")
-            if r_verdict != "VERIFIED" and background_tasks:
+    if background_tasks:
+        for v_obj in verdicts:
+            r_verdict = _verdict_str(v_obj)
+            if r_verdict != "VERIFIED":
+                receipt = _receipt_for_alert(v_obj.receipt_id, session_id, v_obj.tool_name, v_obj)
                 background_tasks.add_task(fire_alerts, r_verdict, session_id, receipt)
 
     return DemoRunResponse(

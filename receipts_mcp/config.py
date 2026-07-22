@@ -9,6 +9,7 @@ Two inputs:
      committed to the file.
 """
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -18,6 +19,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from mcp.client.stdio import StdioServerParameters
 from mcp.client.session_group import SseServerParameters, StreamableHttpParameters
+
+logger = logging.getLogger("receipts.proxy")
 
 _ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
@@ -57,23 +60,27 @@ def load_upstreams(path: str) -> tuple[dict[str, Any], bool]:
 
     result: dict[str, Any] = {}
     for key, spec in (data.get("upstreams") or {}).items():
-        spec = _expand(spec)
-        transport = (spec.get("transport") or "stdio").lower()
-        if transport == "stdio":
-            result[key] = StdioServerParameters(
-                command=spec["command"],
-                args=spec.get("args", []),
-                env={**os.environ, **spec.get("env", {})} if spec.get("env") else None,
-                cwd=spec.get("cwd"),
-            )
-        elif transport == "sse":
-            result[key] = SseServerParameters(
-                url=spec["url"], headers=spec.get("headers"),
-            )
-        elif transport in ("streamable_http", "http"):
-            result[key] = StreamableHttpParameters(
-                url=spec["url"], headers=spec.get("headers"),
-            )
-        else:
-            raise ValueError(f"upstream '{key}': unknown transport '{transport}'")
+        try:
+            spec = _expand(spec)
+            transport = (spec.get("transport") or "stdio").lower()
+            if transport == "stdio":
+                result[key] = StdioServerParameters(
+                    command=spec["command"],
+                    args=spec.get("args", []),
+                    env={**os.environ, **spec.get("env", {})} if spec.get("env") else None,
+                    cwd=spec.get("cwd"),
+                )
+            elif transport == "sse":
+                result[key] = SseServerParameters(
+                    url=spec["url"], headers=spec.get("headers"),
+                )
+            elif transport in ("streamable_http", "http"):
+                result[key] = StreamableHttpParameters(
+                    url=spec["url"], headers=spec.get("headers"),
+                )
+            else:
+                raise ValueError(f"unknown transport '{transport}'")
+        except (KeyError, ValueError) as e:
+            logger.error("upstream '%s': skipping, %s", key, e)
+            continue
     return result, include_demo

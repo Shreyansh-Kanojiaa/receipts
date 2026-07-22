@@ -114,3 +114,16 @@ class AlertRuleResponse(BaseModel):
     channel: str
     config: dict[str, Any]
     created_at: str
+
+
+class ApiKeyResponse(BaseModel):
+    id: str
+    label: str
+    role: str
+    created_at: str
+    revoked_at: str | None = None
+
+
+class RevokeApiKeyResponse(BaseModel):
+    id: str
+    revoked: bool

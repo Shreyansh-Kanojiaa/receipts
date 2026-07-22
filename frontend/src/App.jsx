@@ -1,6 +1,22 @@
 import { useState, useEffect, useRef, useCallback, Fragment } from 'react'
 import { countUp } from './animations'
 
+// Persists a boolean UI preference to localStorage so it survives reloads.
+function usePersistedBool(key, defaultValue) {
+  const [value, setValue] = useState(() => {
+    try {
+      const stored = localStorage.getItem(key)
+      return stored === null ? defaultValue : stored === 'true'
+    } catch {
+      return defaultValue
+    }
+  })
+  useEffect(() => {
+    try { localStorage.setItem(key, String(value)) } catch { /* e.g. private-browsing quota */ }
+  }, [key, value])
+  return [value, setValue]
+}
+
 // ── design tokens ─────────────────────────────────────────────────────────────
 const MONO = 'var(--mono)'
 const SANS = 'var(--sans)'
@@ -182,7 +198,11 @@ function Sidebar({ view, setView, proxyOnline, onReport, collapsed, onToggle }) 
             </div>
           </div>
         )}
-        {collapsed && <Dot color={proxyOnline ? GREEN : RED} />}
+        {collapsed && (
+          <span title={proxyOnline ? 'Online' : 'Offline'}>
+            <Dot color={proxyOnline ? GREEN : RED} />
+          </span>
+        )}
         {/* collapse / expand toggle */}
         <button
           onClick={onToggle}
@@ -431,9 +451,7 @@ function StatCard({ label, value, color, warn }) {
 }
 
 function verdictLabel(v) {
-  if (v === 'VERIFIED') return 'PASS'
-  if (v === 'UNVERIFIED') return 'FAIL'
-  return v // TAMPERED, CONTRADICTED
+  return v
 }
 
 function LedgerRow({ r, expanded, onToggle, isNew, showFullHashes, onReconcile, sessionPill }) {
@@ -451,6 +469,10 @@ function LedgerRow({ r, expanded, onToggle, isNew, showFullHashes, onReconcile, 
       <div
         className={isNew ? 'row-new' : ''}
         onClick={onToggle}
+        tabIndex={0}
+        role="button"
+        aria-expanded={expanded}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle() } }}
         style={{
           display: 'grid',
           gridTemplateColumns: '110px 110px 110px 160px 110px',
@@ -623,10 +645,11 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
 
   const refresh = useCallback(async () => {
     try {
+      const okOrThrow = r => { if (!r.ok) throw new Error(`${r.status}`); return r.json() }
       const [sr, rr, sessions] = await Promise.all([
-        apiFetch('/stats').then(r => r.ok ? r.json() : null),
-        apiFetch('/receipts/all').then(r => r.ok ? r.json() : null),
-        apiFetch('/sessions').then(r => r.ok ? r.json() : null),
+        apiFetch('/stats').then(okOrThrow),
+        apiFetch('/receipts/all').then(okOrThrow),
+        apiFetch('/sessions').then(okOrThrow),
       ])
       setOffline(false)
 
@@ -706,6 +729,13 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
 
   // Reset to page 0 whenever filters change
   useEffect(() => { setPage(0) }, [search, verdictFilter, timeFilter])
+
+  // Clamp page if the filtered set shrinks out from under it (e.g. rows aging
+  // out of a time filter between polls), so we never render a blank page.
+  useEffect(() => {
+    const maxPage = Math.max(0, Math.ceil(filtered.length / PAGE_SIZE) - 1)
+    setPage(p => Math.min(p, maxPage))
+  }, [filtered.length])
 
   return (
     <div>
@@ -911,9 +941,21 @@ function SessionStatusPill({ session }) {
   )
 }
 
-function SessionTimeline({ session, onReconcile }) {
+function SessionTimeline({ session, onReconcile, onClosed }) {
   const [receipts, setReceipts] = useState(null)
   const [loadingRx, setLoadingRx] = useState(true)
+  const [closing, setClosing] = useState(false)
+
+  async function handleClose(e) {
+    e.stopPropagation()
+    setClosing(true)
+    try {
+      await apiFetch(`/sessions/${session.session_id}/close`, { method: 'POST' })
+      await onClosed?.()
+    } finally {
+      setClosing(false)
+    }
+  }
 
   useEffect(() => {
     apiFetch(`/receipts/${session.session_id}`)
@@ -963,7 +1005,21 @@ function SessionTimeline({ session, onReconcile }) {
       )}
 
       {/* footer actions */}
-      <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${BORDER}`, display: 'flex', justifyContent: 'flex-end' }}>
+      <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${BORDER}`, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        {session.status === 'open' && (
+          <button
+            onClick={handleClose}
+            disabled={closing}
+            style={{
+              fontFamily: MONO, fontSize: 10, letterSpacing: '0.08em',
+              background: 'transparent', border: `1px solid ${BORDER}`,
+              color: closing ? DIM : MUTED, cursor: closing ? 'default' : 'pointer',
+              padding: '5px 10px', borderRadius: 2,
+            }}
+          >
+            {closing ? 'CLOSING…' : 'CLOSE SESSION'}
+          </button>
+        )}
         <button
           onClick={e => { e.stopPropagation(); onReconcile?.(session.session_id) }}
           style={{
@@ -984,18 +1040,19 @@ function SessionsView({ onReconcile }) {
   const [loading, setLoading]           = useState(true)
   const [expanded, setExpanded]         = useState(null)
 
+  const load = useCallback(async () => {
+    try {
+      const data = await apiFetch('/sessions').then(r => r.json())
+      setSessions(data)
+      setLoading(false)
+    } catch { setLoading(false) }
+  }, [])
+
   useEffect(() => {
-    let active = true
-    async function load() {
-      try {
-        const data = await apiFetch('/sessions').then(r => r.json())
-        if (active) { setSessions(data); setLoading(false) }
-      } catch { if (active) setLoading(false) }
-    }
     load()
     const t = setInterval(load, 5000)
-    return () => { active = false; clearInterval(t) }
-  }, [])
+    return () => clearInterval(t)
+  }, [load])
 
   const COL = '1fr 120px 80px 60px 100px 110px minmax(110px,auto) 16px'
 
@@ -1036,6 +1093,10 @@ function SessionsView({ onReconcile }) {
               <div key={s.session_id} style={{ borderBottom: `1px solid ${BORDER}` }}>
                 <div
                   onClick={() => setExpanded(isOpen ? null : s.session_id)}
+                  tabIndex={0}
+                  role="button"
+                  aria-expanded={isOpen}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpanded(isOpen ? null : s.session_id) } }}
                   style={{
                     display: 'grid', gridTemplateColumns: COL, gap: 12,
                     padding: '10px 16px', cursor: 'pointer', fontSize: 12, alignItems: 'center',
@@ -1069,7 +1130,7 @@ function SessionsView({ onReconcile }) {
                   </span>
                 </div>
                 {isOpen && (
-                  <SessionTimeline session={s} onReconcile={onReconcile} />
+                  <SessionTimeline session={s} onReconcile={onReconcile} onClosed={load} />
                 )}
               </div>
             )
@@ -1656,6 +1717,7 @@ function AlertRuleCard({ rule, onToggle, onTest, onDelete }) {
           type="checkbox"
           checked={rule.enabled}
           onChange={() => onToggle(rule)}
+          aria-label={`${rule.enabled ? 'Disable' : 'Enable'} rule ${rule.name}`}
           style={{ opacity: 0, width: 0, height: 0 }}
         />
         <span style={{
@@ -1719,6 +1781,7 @@ function AlertsView() {
   const [config, setConfig]         = useState({})
   const [saving, setSaving]         = useState(false)
   const [formMsg, setFormMsg]       = useState(null) // {type:'ok'|'err', text}
+  const [listMsg, setListMsg]       = useState(null) // {type:'ok'|'err', text} for toggle/delete
 
   useEffect(() => { loadRules() }, [])
 
@@ -1795,21 +1858,30 @@ function AlertsView() {
   }
 
   async function handleToggle(rule) {
+    setListMsg(null)
     try {
-      await apiFetch(`/alerts/${rule.id}`, {
+      const res = await apiFetch(`/alerts/${rule.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: !rule.enabled }),
       })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
       await loadRules()
-    } catch {}
+    } catch (e) {
+      setListMsg({ type: 'err', text: `Failed to update rule: ${e.message}` })
+    }
   }
 
   async function handleDelete(id) {
+    if (!window.confirm('Delete this alert rule? This cannot be undone.')) return
+    setListMsg(null)
     try {
-      await apiFetch(`/alerts/${id}`, { method: 'DELETE' })
+      const res = await apiFetch(`/alerts/${id}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
       await loadRules()
-    } catch {}
+    } catch (e) {
+      setListMsg({ type: 'err', text: `Failed to delete rule: ${e.message}` })
+    }
   }
 
   const TRIGGERS = ['CONTRADICTED', 'TAMPERED', 'UNVERIFIED', 'ANY']
@@ -2029,6 +2101,14 @@ function AlertsView() {
       )}
 
       {/* rules list */}
+      {listMsg && (
+        <div style={{
+          marginBottom: 12, padding: '8px 10px', borderRadius: 3, fontFamily: MONO, fontSize: 12,
+          background: 'rgba(239,68,68,0.08)', border: `1px solid ${RED}`, color: RED,
+        }}>
+          {listMsg.text}
+        </div>
+      )}
       {rules.length === 0 ? (
         <div style={{
           padding: '48px 0', textAlign: 'center',
@@ -2292,7 +2372,7 @@ python3 -m uvicorn main:app --port 8000`} />
 // ── settings view ─────────────────────────────────────────────────────────────
 function SettingsView({ showFullHashes, setShowFullHashes }) {
   const settings = [
-    ['BACKEND_URL',          'http://localhost:8000'],
+    ['BACKEND_URL',          API_BASE || window.location.origin],
     ['SIGNING_ALGORITHM',    'HMAC-SHA256'],
     ['HASH_FUNCTION',        'SHA-256 (sort_keys=True)'],
     ['STORAGE',              'SQLITE'],
@@ -2342,6 +2422,7 @@ function SettingsView({ showFullHashes, setShowFullHashes }) {
             type="checkbox"
             checked={showFullHashes}
             onChange={e => setShowFullHashes(e.target.checked)}
+            aria-label="Show full hashes instead of truncated"
             style={{ opacity: 0, width: 0, height: 0 }}
           />
           <span style={{
@@ -2363,6 +2444,67 @@ function SettingsView({ showFullHashes, setShowFullHashes }) {
             transition: 'left 150ms ease',
           }} />
         </label>
+      </div>
+
+      <ApiKeysSection />
+    </div>
+  )
+}
+
+// Only renders for admin-role callers — /api-keys 403s for viewer/proxy keys,
+// in which case we hide the section rather than show a permission error.
+function ApiKeysSection() {
+  const [keys, setKeys] = useState(null)
+  const [visible, setVisible] = useState(false)
+
+  const load = useCallback(async () => {
+    const r = await apiFetch('/api-keys')
+    if (r.status === 403 || r.status === 401) { setVisible(false); return }
+    if (r.ok) { setKeys(await r.json()); setVisible(true) }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  async function handleRevoke(id) {
+    if (!window.confirm('Revoke this API key? This cannot be undone.')) return
+    await apiFetch(`/api-keys/${id}/revoke`, { method: 'POST' })
+    await load()
+  }
+
+  if (!visible || !keys) return null
+
+  return (
+    <div style={{ marginTop: 20 }}>
+      <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: DIM, marginBottom: 12 }}>API_KEYS</div>
+      <div style={{ border: `1px solid ${BORDER}`, borderRadius: 2, overflow: 'hidden' }}>
+        {keys.length === 0 ? (
+          <div style={{ padding: '16px', fontFamily: MONO, fontSize: 11, color: DIM }}>No API keys.</div>
+        ) : keys.map((k, i) => (
+          <div key={k.id} style={{
+            display: 'grid', gridTemplateColumns: '1fr 90px 180px 90px', gap: 16,
+            padding: '10px 16px', alignItems: 'center',
+            borderBottom: i < keys.length - 1 ? `1px solid ${BORDER}` : 'none',
+            background: i % 2 === 1 ? SURF2 : 'transparent',
+          }}>
+            <span style={{ fontFamily: MONO, fontSize: 12, color: TEXT }}>{k.label}</span>
+            <span style={{ fontFamily: MONO, fontSize: 11, color: MUTED }}>{k.role}</span>
+            <span style={{ fontFamily: MONO, fontSize: 11, color: DIM }}>{fmtTs(k.created_at)}</span>
+            {k.revoked_at ? (
+              <span style={{ fontFamily: MONO, fontSize: 10, color: DIM, letterSpacing: '0.06em' }}>REVOKED</span>
+            ) : (
+              <button
+                onClick={() => handleRevoke(k.id)}
+                style={{
+                  fontFamily: MONO, fontSize: 10, letterSpacing: '0.06em',
+                  background: 'transparent', border: `1px solid ${RED}66`,
+                  color: RED, cursor: 'pointer', padding: '4px 8px', borderRadius: 2,
+                }}
+              >
+                REVOKE
+              </button>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -2400,9 +2542,9 @@ export default function App() {
   const [viewAnim, setViewAnim]       = useState(null)
   const [proxyOnline, setProxyOnline] = useState(false)
   const [toast, setToast]             = useState(null)
-  const [showFullHashes, setShowFullHashes] = useState(false)
+  const [showFullHashes, setShowFullHashes] = usePersistedBool('receipts.showFullHashes', false)
   const [reconcileSession, setReconcileSession] = useState(null)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = usePersistedBool('receipts.sidebarCollapsed', false)
 
   // poll proxy status every 5s
   useEffect(() => {

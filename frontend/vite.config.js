@@ -13,6 +13,7 @@ export default defineConfig({
       '/stats':    'http://localhost:8000',
       '/sessions': 'http://localhost:8000',
       '/alerts':   'http://localhost:8000',
+      '/api-keys': 'http://localhost:8000',
     },
   },
 })

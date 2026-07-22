@@ -1,7 +1,7 @@
 """Core verification logic — reused by the /verify endpoint and auto_verify."""
 from models import VerifyVerdict
 from database import get_receipt_for_session, update_receipt_verdict
-from signer import compute_claimed_hash, verify_receipt_signature
+from signer import compute_claimed_hash, verify_receipt_signature, verify_receipt_content
 
 
 def run_verify(session_id: str, claimed_outputs: list) -> list[VerifyVerdict]:
@@ -38,7 +38,7 @@ def run_verify(session_id: str, claimed_outputs: list) -> list[VerifyVerdict]:
             continue
 
         actual_hash     = stored["output_hash"]
-        signature_valid = verify_receipt_signature(stored)
+        signature_valid = verify_receipt_signature(stored) and verify_receipt_content(stored)
         tool_matches    = stored["tool_name"] == tool_name
         output_matches  = claimed_hash == actual_hash
 

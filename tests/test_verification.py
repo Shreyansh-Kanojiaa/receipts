@@ -190,6 +190,23 @@ def test_auto_verify_tampered(isolated_database):
     assert session["verification_scope"] == "signature_only"
 
 
+def test_auto_verify_legacy_null_payload_not_misclassified_as_tampered(isolated_database):
+    """Regression: tool_input/tool_output are nullable (ALTER TABLE ADD COLUMN), so a
+    row that never had them populated (e.g. written before this column existed) must
+    not be treated as content-tampered just because hash_dict(None) != input_hash."""
+    receipt = call_write_file("session-legacy-null", "hello")
+
+    with database.get_connection() as conn:
+        conn.execute(
+            "UPDATE receipts SET tool_input = NULL, tool_output = NULL WHERE id = ?",
+            (receipt["id"],),
+        )
+        conn.commit()
+
+    verdict = asyncio.run(av.auto_verify("session-legacy-null"))
+    assert verdict == "VERIFIED"
+
+
 def test_auto_verify_empty_session(isolated_database):
     # Create a session entry with no receipts — auto_verify should defer (return None)
     database.upsert_session("session-empty")
@@ -552,3 +569,48 @@ def test_api_key_revocation(isolated_database):
 
         # The revoked key no longer authenticates.
         assert client.get("/stats", headers=target_headers).status_code == 401
+
+
+def test_api_key_mint_and_whoami(isolated_database):
+    from fastapi.testclient import TestClient
+    import auth
+
+    database.insert_api_key(
+        id="k-admin2", key_hash=auth.hash_key("admin-key-2"), label="admin",
+        role="admin", created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    database.insert_api_key(
+        id="k-viewer2", key_hash=auth.hash_key("viewer-key-2"), label="viewer",
+        role="viewer", created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    admin_headers  = {"Authorization": "Bearer admin-key-2"}
+    viewer_headers = {"Authorization": "Bearer viewer-key-2"}
+
+    with TestClient(main.app) as client:
+        # Non-admin can't mint keys.
+        assert client.post(
+            "/api-keys", json={"label": "x", "role": "proxy"}, headers=viewer_headers,
+        ).status_code == 403
+
+        created = client.post(
+            "/api-keys", json={"label": "new-proxy-key", "role": "proxy"}, headers=admin_headers,
+        )
+        assert created.status_code == 201
+        body = created.json()
+        assert body["role"] == "proxy"
+        raw_key = body["key"]
+        assert raw_key  # the raw key is returned exactly once
+
+        # The newly minted key authenticates immediately.
+        minted_headers = {"Authorization": f"Bearer {raw_key}"}
+        assert client.post(
+            "/tools/record",
+            json={"session_id": "s", "tool_name": "t", "tool_input": {}, "tool_output": {}, "status": "success"},
+            headers=minted_headers,
+        ).status_code == 201
+
+        # /whoami reflects the presented key's identity, not any other key.
+        who = client.get("/whoami", headers=minted_headers)
+        assert who.status_code == 200
+        assert who.json()["id"] == body["id"]
+        assert who.json()["role"] == "proxy"

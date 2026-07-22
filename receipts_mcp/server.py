@@ -23,7 +23,9 @@ from mcp.server.stdio import stdio_server
 from mcp.client.session_group import ClientSessionGroup
 
 from .config import ProxySettings, load_upstreams
-from .proxy import SESSION_ID, namespacing_hook, call_and_record
+from .proxy import SESSION_ID, namespacing_hook, call_and_record, log_receipt_summary
+
+_UPSTREAM_RETRY_DELAY_SECONDS = 2.0
 
 logger = logging.getLogger("receipts.proxy")
 
@@ -109,7 +111,10 @@ async def run_proxy() -> None:
             async def call_demo(name: str, arguments: dict) -> types.CallToolResult:
                 return await _demo_call(client, settings, name, arguments)
 
-            await _serve(server)
+            try:
+                await _serve(server)
+            finally:
+                log_receipt_summary()
             return
 
         # Real proxy: connect to every upstream and aggregate their tools.
@@ -121,7 +126,17 @@ async def run_proxy() -> None:
                     connected += 1
                     logger.info("connected upstream", extra={"upstream": key})
                 except Exception:
-                    logger.exception("failed to connect upstream", extra={"upstream": key})
+                    # One retry after a short delay — an upstream that's briefly
+                    # unavailable at proxy startup shouldn't lose its tools for the
+                    # whole process lifetime.
+                    logger.warning("failed to connect upstream, retrying once", extra={"upstream": key})
+                    await asyncio.sleep(_UPSTREAM_RETRY_DELAY_SECONDS)
+                    try:
+                        await group.connect_to_server(params)
+                        connected += 1
+                        logger.info("connected upstream (retry)", extra={"upstream": key})
+                    except Exception:
+                        logger.exception("failed to connect upstream", extra={"upstream": key})
 
             logger.info(
                 "proxy ready",
@@ -141,7 +156,10 @@ async def run_proxy() -> None:
                     return await _demo_call(client, settings, name, arguments)
                 return await call_and_record(group, client, settings, name, arguments)
 
-            await _serve(server)
+            try:
+                await _serve(server)
+            finally:
+                log_receipt_summary()
 
 
 async def _serve(server: Server) -> None:

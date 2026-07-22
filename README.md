@@ -77,9 +77,13 @@ Important ones:
 | `LOG_LEVEL` | logging level (`INFO`, `DEBUG`, etc.) |
 | `LOG_JSON` | `true` for structured JSON log output |
 | `RATE_LIMIT` | global per-IP rate limit (e.g. `120/minute`) |
+| `INACTIVITY_TIMEOUT_SECONDS` | seconds of session inactivity before auto-close (default `30`) |
+| `CHECKER_INTERVAL_SECONDS` | how often the stale-session sweep runs (default `10`) |
 | `RECEIPTS_URL` | backend URL for the MCP proxy |
 | `RECEIPTS_API_KEY` | proxy-role key for the MCP proxy |
 | `UPSTREAMS_PATH` | upstream MCP server config for the proxy |
+| `RECORD_TIMEOUT_SECONDS` | proxy's backend POST timeout (default `5.0`) |
+| `TOOL_TIMEOUT_SECONDS` | proxy's upstream tool-call timeout (default `60.0`) |
 | `VITE_BACKEND_URL` | frontend build-time backend URL |
 | `VITE_RECEIPTS_VIEWER_KEY` | frontend dev-time API key |
 | `RECEIPTS_PROXY_KEY` | nginx-injected key for the production frontend container |
@@ -126,7 +130,9 @@ Important ones:
 | `POST /alerts/{id}/test` | proxy | send a test alert |
 | `POST /demo/run` | proxy | run a built-in demo scenario |
 | `GET /api-keys` | admin | list API keys (labels/roles only, never raw keys or hashes) |
+| `POST /api-keys` | admin | mint a new API key (raw key returned once, never stored) |
 | `POST /api-keys/{id}/revoke` | admin | revoke an API key |
+| `GET /whoami` | viewer | identity (id/label/role) of the presented API key |
 | `GET /healthz` | none | liveness probe |
 | `GET /readyz` | none | readiness probe (checks DB) |
 
@@ -214,7 +220,7 @@ If `receipts_mcp/upstreams.json` does not exist, the proxy falls back to the bui
 - `http_fetch`
 - `db_query`
 
-Supported upstream transports: `stdio`, `sse`, `streamable_http`.
+Supported upstream transports: `stdio`, `sse`, `streamable_http` (`http` is accepted as an alias).
 
 `${ENV_VAR}` references inside upstream configs are expanded from the process environment at runtime.
 

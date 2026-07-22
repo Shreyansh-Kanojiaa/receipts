@@ -628,6 +628,7 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
   const [search, setSearch]     = useState('')
   const [verdictFilter, setVerdictFilter] = useState('all')
   const [timeFilter, setTimeFilter]       = useState('all')
+  const [fetchLimit, setFetchLimit]       = useState(50)
   const [autoRefresh, setAutoRefresh]     = useState(true)
   const [offline, setOffline]   = useState(false)
   const [offlineDismissed, setOfflineDismissed] = useState(false)
@@ -635,9 +636,11 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
   const hasCountedRef = useRef(false)
 
   // Sync offline state with the App-level proxy poll so the banner
-  // auto-dismisses as soon as the backend comes back online
+  // auto-dismisses as soon as the backend comes back online. Syncing to an
+  // external poll result, not deriving from other render state.
   useEffect(() => {
     if (proxyOnline) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setOffline(false)
       setOfflineDismissed(false)
     }
@@ -648,7 +651,7 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
       const okOrThrow = r => { if (!r.ok) throw new Error(`${r.status}`); return r.json() }
       const [sr, rr, sessions] = await Promise.all([
         apiFetch('/stats').then(okOrThrow),
-        apiFetch('/receipts/all').then(okOrThrow),
+        apiFetch(`/receipts/all?limit=${fetchLimit}`).then(okOrThrow),
         apiFetch('/sessions').then(okOrThrow),
       ])
       setOffline(false)
@@ -684,7 +687,6 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
       }
 
       if (rr) {
-        console.log('[receipts/all] raw response:', rr)
         const incomingIds = new Set(rr.map(r => r.id))
         if (prevIdsRef.current.size > 0) {
           const freshIds = rr.filter(r => !prevIdsRef.current.has(r.id)).map(r => r.id)
@@ -699,9 +701,10 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
     } catch {
       setOffline(true)
     }
-  }, [])
+  }, [fetchLimit])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch-on-mount / limit change
     refresh()
   }, [refresh])
 
@@ -711,6 +714,9 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
     return () => clearInterval(t)
   }, [refresh, autoRefresh])
 
+  // Filtering by "now" needs the real clock; re-deriving it each render is
+  // intentional here (it tracks the 3s poll cadence) rather than a purity bug.
+  // eslint-disable-next-line react-hooks/purity
   const nowMs = Date.now()
   const filtered = receipts.filter(r => {
     if (search) {
@@ -728,12 +734,14 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
   const PAGE_SIZE = 20
 
   // Reset to page 0 whenever filters change
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setPage(0) }, [search, verdictFilter, timeFilter])
 
   // Clamp page if the filtered set shrinks out from under it (e.g. rows aging
   // out of a time filter between polls), so we never render a blank page.
   useEffect(() => {
     const maxPage = Math.max(0, Math.ceil(filtered.length / PAGE_SIZE) - 1)
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPage(p => Math.min(p, maxPage))
   }, [filtered.length])
 
@@ -807,6 +815,17 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
           <option value="1h">Last hour</option>
           <option value="24h">Last 24h</option>
         </select>
+        <select
+          value={fetchLimit}
+          onChange={e => setFetchLimit(Number(e.target.value))}
+          title="How many receipts to fetch from the backend"
+          style={{ padding: '7px 10px', background: SURF, border: `1px solid ${BORDER}`, borderRadius: 3, color: TEXT, fontFamily: MONO, fontSize: 12, cursor: 'pointer' }}
+        >
+          <option value={50}>Last 50</option>
+          <option value={200}>Last 200</option>
+          <option value={1000}>Last 1000</option>
+          <option value={stats.total_receipts || 1}>All ({stats.total_receipts})</option>
+        </select>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontFamily: MONO, color: MUTED, cursor: 'pointer', userSelect: 'none' }}>
           <input
             type="checkbox"
@@ -817,6 +836,15 @@ function LedgerView({ showFullHashes, onReconcile, proxyOnline }) {
           Auto-refresh
         </label>
       </div>
+
+      {receipts.length < stats.total_receipts && (
+        <div style={{
+          marginBottom: 12, padding: '6px 10px', borderRadius: 2, fontFamily: MONO, fontSize: 11,
+          background: 'rgba(245,158,11,0.06)', border: `1px solid ${AMBER}44`, color: AMBER,
+        }}>
+          Showing {receipts.length} of {stats.total_receipts} receipts — raise the fetch limit above to see more.
+        </div>
+      )}
 
       {/* table */}
       <div style={{ border: `1px solid ${BORDER}`, borderRadius: 2, overflow: 'hidden' }}>
@@ -945,13 +973,17 @@ function SessionTimeline({ session, onReconcile, onClosed }) {
   const [receipts, setReceipts] = useState(null)
   const [loadingRx, setLoadingRx] = useState(true)
   const [closing, setClosing] = useState(false)
+  const [closeError, setCloseError] = useState(null)
 
   async function handleClose(e) {
     e.stopPropagation()
-    setClosing(true)
+    setClosing(true); setCloseError(null)
     try {
-      await apiFetch(`/sessions/${session.session_id}/close`, { method: 'POST' })
+      const res = await apiFetch(`/sessions/${session.session_id}/close`, { method: 'POST' })
+      if (!res.ok) throw new Error(res.status === 403 ? 'Not authorized to close sessions' : `HTTP ${res.status}`)
       await onClosed?.()
+    } catch (e) {
+      setCloseError(e.message)
     } finally {
       setClosing(false)
     }
@@ -1005,6 +1037,11 @@ function SessionTimeline({ session, onReconcile, onClosed }) {
       )}
 
       {/* footer actions */}
+      {closeError && (
+        <div style={{ marginTop: 10, fontFamily: MONO, fontSize: 10, color: RED, letterSpacing: '0.04em' }}>
+          {closeError}
+        </div>
+      )}
       <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${BORDER}`, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
         {session.status === 'open' && (
           <button
@@ -1039,16 +1076,23 @@ function SessionsView({ onReconcile }) {
   const [sessions, setSessions]         = useState([])
   const [loading, setLoading]           = useState(true)
   const [expanded, setExpanded]         = useState(null)
+  const [error, setError]               = useState(null)
 
   const load = useCallback(async () => {
     try {
-      const data = await apiFetch('/sessions').then(r => r.json())
-      setSessions(data)
+      const res = await apiFetch('/sessions')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setSessions(await res.json())
+      setError(null)
+    } catch (e) {
+      setError(`Failed to load sessions: ${e.message}`)
+    } finally {
       setLoading(false)
-    } catch { setLoading(false) }
+    }
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch-on-mount
     load()
     const t = setInterval(load, 5000)
     return () => clearInterval(t)
@@ -1079,6 +1123,10 @@ function SessionsView({ onReconcile }) {
           [0, 1, 2].map(i => (
             <div key={i} className="skeleton-row" style={{ height: 44, borderBottom: `1px solid ${BORDER}`, animationDelay: `${i * 0.15}s` }} />
           ))
+        ) : error ? (
+          <div style={{ padding: '48px 0', textAlign: 'center', color: RED, fontFamily: MONO, fontSize: 12 }}>
+            {error}
+          </div>
         ) : sessions.length === 0 ? (
           <div style={{ padding: '48px 0', textAlign: 'center', color: MUTED, fontFamily: MONO, fontSize: 12 }}>
             No sessions yet. Run a demo or make a tool call.
@@ -1287,15 +1335,16 @@ function ReconciliationView({ initialSession, onClearInitial }) {
   const [result, setResult]             = useState(null)
   const [error, setError]               = useState(null)
   const [copied, setCopied]             = useState(false)
+  const [sessionsError, setSessionsError] = useState(null)
   const didInitRef                      = useRef(false)
   const autoRunIdRef                    = useRef(initialSession ?? null)
 
   // Populate sessions dropdown from /sessions (includes auto_verdict + verification_scope)
   useEffect(() => {
     apiFetch('/sessions')
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
       .then(data => setSessions(data))
-      .catch(() => {})
+      .catch(e => setSessionsError(`Failed to load sessions: ${e.message}`))
   }, [])
 
   const selectedSession = sessions.find(s => s.session_id === selected)
@@ -1317,6 +1366,7 @@ function ReconciliationView({ initialSession, onClearInitial }) {
   //   • otherwise, auto-run only when the selection arrived from another view; a manual
   //     dropdown pick waits for the button.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clearing derived result when selection is cleared
     if (!selected) { setResult(null); return }
     const s = sessions.find(x => x.session_id === selected)
     if (!s) return // session list not loaded yet
@@ -1470,6 +1520,15 @@ function ReconciliationView({ initialSession, onClearInitial }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+      {sessionsError && (
+        <div style={{
+          padding: '8px 10px', borderRadius: 2, fontFamily: MONO, fontSize: 11,
+          background: 'rgba(239,68,68,0.08)', border: `1px solid ${RED}`, color: RED,
+        }}>
+          {sessionsError}
+        </div>
+      )}
 
       {/* ── Section 1: Session selector ── */}
       <div style={{
@@ -1676,7 +1735,7 @@ const TRIGGER_COLORS = {
 
 const CHANNEL_LABELS = { webhook: 'Webhook', email: 'Email', slack: 'Slack' }
 
-function AlertRuleCard({ rule, onToggle, onTest, onDelete }) {
+function AlertRuleCard({ rule, onToggle, onDelete }) {
   const [testState, setTestState] = useState(null) // null | 'sending' | 'sent' | 'failed'
 
   async function handleTest() {
@@ -1787,9 +1846,14 @@ function AlertsView() {
 
   async function loadRules() {
     try {
-      const data = await apiFetch('/alerts').then(r => r.json())
+      const res = await apiFetch('/alerts')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
       setRules(Array.isArray(data) ? data : [])
-    } catch {}
+      setListMsg(null)
+    } catch (e) {
+      setListMsg({ type: 'err', text: `Failed to load alert rules: ${e.message}` })
+    }
   }
 
   function openForm() {
@@ -2456,6 +2520,13 @@ function SettingsView({ showFullHashes, setShowFullHashes }) {
 function ApiKeysSection() {
   const [keys, setKeys] = useState(null)
   const [visible, setVisible] = useState(false)
+  const [myId, setMyId] = useState(null)
+  const [error, setError] = useState(null)
+  const [showCreate, setShowCreate] = useState(false)
+  const [label, setLabel] = useState('')
+  const [role, setRole] = useState('viewer')
+  const [creating, setCreating] = useState(false)
+  const [justCreated, setJustCreated] = useState(null) // {id, key} shown once
 
   const load = useCallback(async () => {
     const r = await apiFetch('/api-keys')
@@ -2463,19 +2534,138 @@ function ApiKeysSection() {
     if (r.ok) { setKeys(await r.json()); setVisible(true) }
   }, [])
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch-on-mount
   useEffect(() => { load() }, [load])
 
+  useEffect(() => {
+    apiFetch('/whoami').then(r => r.ok ? r.json() : null).then(w => { if (w) setMyId(w.id) }).catch(() => {})
+  }, [])
+
   async function handleRevoke(id) {
-    if (!window.confirm('Revoke this API key? This cannot be undone.')) return
-    await apiFetch(`/api-keys/${id}/revoke`, { method: 'POST' })
-    await load()
+    const warning = id === myId
+      ? 'This is the key authenticating YOUR current session. Revoking it will lock you out. Continue?'
+      : 'Revoke this API key? This cannot be undone.'
+    if (!window.confirm(warning)) return
+    setError(null)
+    try {
+      const r = await apiFetch(`/api-keys/${id}/revoke`, { method: 'POST' })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      await load()
+    } catch (e) {
+      setError(`Failed to revoke key: ${e.message}`)
+    }
+  }
+
+  async function handleCreate() {
+    setCreating(true); setError(null)
+    try {
+      const r = await apiFetch('/api-keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label, role }),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const created = await r.json()
+      setJustCreated({ id: created.id, key: created.key })
+      setLabel(''); setRole('viewer'); setShowCreate(false)
+      await load()
+    } catch (e) {
+      setError(`Failed to create key: ${e.message}`)
+    } finally {
+      setCreating(false)
+    }
   }
 
   if (!visible || !keys) return null
 
   return (
     <div style={{ marginTop: 20 }}>
-      <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: DIM, marginBottom: 12 }}>API_KEYS</div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <div style={{ fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: '0.1em', color: DIM }}>API_KEYS</div>
+        <button
+          onClick={() => setShowCreate(v => !v)}
+          style={{
+            padding: '4px 10px', background: showCreate ? 'transparent' : BLUE,
+            border: `1px solid ${showCreate ? BORDER2 : BLUE}`,
+            borderRadius: 2, color: showCreate ? MUTED : '#fff',
+            fontFamily: MONO, fontSize: 10, letterSpacing: '0.06em', cursor: 'pointer',
+          }}
+        >
+          {showCreate ? 'CANCEL' : 'CREATE_KEY'}
+        </button>
+      </div>
+
+      {justCreated && (
+        <div style={{
+          marginBottom: 12, padding: '10px 12px', borderRadius: 2,
+          background: 'rgba(34,197,94,0.06)', border: `1px solid ${GREEN}`,
+        }}>
+          <div style={{ fontFamily: MONO, fontSize: 11, color: GREEN, marginBottom: 6 }}>
+            Key created. Copy it now — it will not be shown again.
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <code style={{ fontFamily: MONO, fontSize: 11, color: TEXT, wordBreak: 'break-all', flex: 1 }}>{justCreated.key}</code>
+            <button
+              onClick={() => { navigator.clipboard.writeText(justCreated.key); setJustCreated(null) }}
+              style={{
+                fontFamily: MONO, fontSize: 10, letterSpacing: '0.06em', flexShrink: 0,
+                background: 'transparent', border: `1px solid ${BORDER2}`, color: MUTED,
+                cursor: 'pointer', padding: '4px 8px', borderRadius: 2,
+              }}
+            >
+              COPY &amp; DISMISS
+            </button>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div style={{
+          marginBottom: 12, padding: '8px 10px', borderRadius: 2, fontFamily: MONO, fontSize: 11,
+          background: 'rgba(239,68,68,0.08)', border: `1px solid ${RED}`, color: RED,
+        }}>
+          {error}
+        </div>
+      )}
+
+      {showCreate && (
+        <div style={{
+          marginBottom: 12, padding: '12px 14px', display: 'flex', gap: 10, alignItems: 'flex-end',
+          background: SURF, border: `1px solid ${BORDER}`, borderRadius: 2,
+        }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
+            <label style={{ fontFamily: MONO, fontSize: 10, color: DIM }}>LABEL</label>
+            <input
+              value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. ci-runner"
+              style={{ padding: '6px 8px', background: SURF2, border: `1px solid ${BORDER}`, borderRadius: 2, color: TEXT, fontFamily: MONO, fontSize: 12, outline: 'none' }}
+            />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <label style={{ fontFamily: MONO, fontSize: 10, color: DIM }}>ROLE</label>
+            <select
+              value={role} onChange={e => setRole(e.target.value)}
+              style={{ padding: '6px 8px', background: SURF2, border: `1px solid ${BORDER}`, borderRadius: 2, color: TEXT, fontFamily: MONO, fontSize: 12, outline: 'none' }}
+            >
+              <option value="viewer">viewer</option>
+              <option value="proxy">proxy</option>
+              <option value="admin">admin</option>
+            </select>
+          </div>
+          <button
+            onClick={handleCreate}
+            disabled={creating || !label}
+            style={{
+              padding: '7px 14px', background: creating || !label ? SURF2 : BLUE,
+              border: `1px solid ${creating || !label ? BORDER : BLUE}`,
+              borderRadius: 2, color: creating || !label ? MUTED : '#fff',
+              fontFamily: MONO, fontSize: 12, cursor: creating || !label ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {creating ? 'Creating...' : 'Create'}
+          </button>
+        </div>
+      )}
+
       <div style={{ border: `1px solid ${BORDER}`, borderRadius: 2, overflow: 'hidden' }}>
         {keys.length === 0 ? (
           <div style={{ padding: '16px', fontFamily: MONO, fontSize: 11, color: DIM }}>No API keys.</div>
@@ -2486,7 +2676,12 @@ function ApiKeysSection() {
             borderBottom: i < keys.length - 1 ? `1px solid ${BORDER}` : 'none',
             background: i % 2 === 1 ? SURF2 : 'transparent',
           }}>
-            <span style={{ fontFamily: MONO, fontSize: 12, color: TEXT }}>{k.label}</span>
+            <span style={{ fontFamily: MONO, fontSize: 12, color: TEXT, display: 'flex', alignItems: 'center', gap: 6 }}>
+              {k.label}
+              {k.id === myId && (
+                <span style={{ fontFamily: MONO, fontSize: 9, color: BLUE, border: `1px solid ${BLUE}44`, borderRadius: 2, padding: '1px 4px' }}>YOU</span>
+              )}
+            </span>
             <span style={{ fontFamily: MONO, fontSize: 11, color: MUTED }}>{k.role}</span>
             <span style={{ fontFamily: MONO, fontSize: 11, color: DIM }}>{fmtTs(k.created_at)}</span>
             {k.revoked_at ? (
@@ -2513,14 +2708,16 @@ function ApiKeysSection() {
 // ── generate report ───────────────────────────────────────────────────────────
 async function generateReport(setToast) {
   try {
-    const [rr, sr] = await Promise.all([
-      apiFetch('/receipts/all').then(r => r.json()),
-      apiFetch('/stats').then(r => r.json()),
-    ])
+    const sr = await apiFetch('/stats').then(r => r.json())
+    const total = sr.total_receipts ?? 0
+    // Full audit export — request every receipt, not the dashboard's default page cap.
+    const rr = await apiFetch(`/receipts/all?limit=${Math.max(total, 1)}`).then(r => r.json())
+    const truncated = rr.length < total
     const report = {
       generated_at: new Date().toISOString(),
       summary: sr,
       receipts: rr,
+      truncated,
     }
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' })
     const url  = URL.createObjectURL(blob)
@@ -2530,7 +2727,7 @@ async function generateReport(setToast) {
     a.download = `receipts-audit-${ts}.json`
     a.click()
     URL.revokeObjectURL(url)
-    setToast('Report downloaded')
+    setToast(truncated ? `Report downloaded (${rr.length}/${total} receipts — truncated)` : 'Report downloaded')
   } catch {
     setToast('Failed to generate report')
   }

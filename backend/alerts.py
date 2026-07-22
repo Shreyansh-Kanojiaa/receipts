@@ -8,29 +8,56 @@ from email.mime.text import MIMEText
 
 import httpx
 
-from database import get_enabled_rules_for_verdict
+from database import get_enabled_rules_for_verdict, has_delivered, record_alert_delivery
 from logging_config import get_logger
 
 logger = get_logger("receipts.alerts")
 
+_RETRY_DELAY_SECONDS = 1.0
+
 
 async def fire_alerts(verdict: str, session_id: str, receipt: dict) -> None:
-    """Called after any verdict is determined. Fires all matching enabled rules."""
+    """Called after any verdict is determined. Fires all matching enabled rules.
+
+    Dedups on (rule, session, receipt, verdict): the same underlying event can reach
+    here from auto_verify, /verify, and /sessions/{id}/verify-claim independently, and
+    should only ever notify once. Each send is retried once before being recorded as
+    failed, and every attempt (sent or failed) is persisted for audit/observability.
+    """
+    receipt_id = receipt.get("id")
     rules = get_enabled_rules_for_verdict(verdict)
     for rule in rules:
-        try:
-            config = json.loads(rule["config"])
-            if rule["channel"] == "webhook":
-                await send_webhook(rule, config, verdict, session_id, receipt)
-            elif rule["channel"] == "email":
-                await send_email(rule, config, verdict, session_id, receipt)
-            elif rule["channel"] == "slack":
-                await send_slack(rule, config, verdict, session_id, receipt)
-        except Exception:
-            logger.exception(
-                "alert delivery failed",
-                extra={"rule_id": rule["id"], "channel": rule["channel"], "verdict": verdict, "session_id": session_id},
+        if has_delivered(rule["id"], session_id, receipt_id, verdict):
+            continue
+
+        config = json.loads(rule["config"])
+        error = None
+        for attempt in (1, 2):
+            try:
+                if rule["channel"] == "webhook":
+                    await send_webhook(rule, config, verdict, session_id, receipt)
+                elif rule["channel"] == "email":
+                    await send_email(rule, config, verdict, session_id, receipt)
+                elif rule["channel"] == "slack":
+                    await send_slack(rule, config, verdict, session_id, receipt)
+                error = None
+                break
+            except Exception as e:
+                error = str(e)
+                if attempt == 1:
+                    await asyncio.sleep(_RETRY_DELAY_SECONDS)
+
+        if error is None:
+            record_alert_delivery(rule["id"], session_id, receipt_id, verdict, "sent")
+        else:
+            logger.error(
+                "alert delivery failed after retry",
+                extra={
+                    "rule_id": rule["id"], "channel": rule["channel"],
+                    "verdict": verdict, "session_id": session_id, "error": error,
+                },
             )
+            record_alert_delivery(rule["id"], session_id, receipt_id, verdict, "failed", error=error)
 
 
 async def send_webhook(rule, config, verdict, session_id, receipt):

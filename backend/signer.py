@@ -43,7 +43,13 @@ def verify_receipt_content(receipt: dict) -> bool:
     The HMAC only covers the hash columns, not the raw payload (see sign_receipt),
     so a direct edit to the raw tool_input/tool_output blobs that leaves the hash
     columns untouched passes verify_receipt_signature. This catches that case.
+
+    tool_input/tool_output are nullable columns (added after the fact via ALTER
+    TABLE), so a row that never had them populated has nothing to check content
+    tampering against — that's "unknown", not "tampered", so it passes here.
     """
+    if receipt.get("tool_input") is None or receipt.get("tool_output") is None:
+        return True
     return (
         hash_dict(receipt["tool_input"]) == receipt["input_hash"]
         and hash_dict(receipt["tool_output"]) == receipt["output_hash"]

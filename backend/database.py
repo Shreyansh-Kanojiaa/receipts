@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -27,10 +28,28 @@ def _resolve_db_path() -> Path:
 DB_PATH = _resolve_db_path()
 
 
-def get_connection() -> sqlite3.Connection:
+@contextmanager
+def get_connection():
+    """Open a connection for one unit of work, then commit/rollback and close it.
+
+    WAL mode lets readers and writers proceed concurrently instead of blocking on
+    the single rollback-journal lock; busy_timeout gives a writer that does contend
+    a chance to retry instead of raising 'database is locked' immediately. Every
+    call site already uses `with get_connection() as conn:`, so becoming a
+    @contextmanager here is a drop-in change — no call sites need to change.
+    """
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    return conn
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def init_db() -> None:
@@ -108,6 +127,28 @@ def init_db() -> None:
                 created_at  TEXT NOT NULL
             )
         """)
+
+        # Records every alert delivery attempt (sent or failed), keyed so the same
+        # underlying event (rule + session + receipt + verdict) is only delivered once
+        # even if multiple verification paths fire for it (auto_verify, /verify,
+        # /sessions/{id}/verify-claim).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS alert_deliveries (
+                id          TEXT PRIMARY KEY,
+                rule_id     TEXT NOT NULL,
+                session_id  TEXT NOT NULL,
+                receipt_id  TEXT NOT NULL,
+                verdict     TEXT NOT NULL,
+                status      TEXT NOT NULL CHECK(status IN ('sent', 'failed')),
+                error       TEXT,
+                created_at  TEXT NOT NULL
+            )
+        """)
+        conn.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_alert_delivery_identity
+               ON alert_deliveries(rule_id, session_id, receipt_id, verdict)
+               WHERE status = 'sent'"""
+        )
         conn.commit()
 
 
@@ -417,6 +458,34 @@ def get_enabled_rules_for_verdict(verdict: str) -> list[dict]:
             (verdict,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def has_delivered(rule_id: str, session_id: str, receipt_id: str, verdict: str) -> bool:
+    """Whether this exact (rule, session, receipt, verdict) event already delivered
+    successfully — used to dedup across auto_verify/verify/verify-claim call paths."""
+    with get_connection() as conn:
+        row = conn.execute(
+            """SELECT 1 FROM alert_deliveries
+               WHERE rule_id = ? AND session_id = ? AND receipt_id = ? AND verdict = ?
+                 AND status = 'sent'""",
+            (rule_id, session_id, receipt_id, verdict),
+        ).fetchone()
+    return row is not None
+
+
+def record_alert_delivery(
+    rule_id: str, session_id: str, receipt_id: str, verdict: str,
+    status: str, error: str | None = None,
+) -> None:
+    import uuid
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO alert_deliveries
+               (id, rule_id, session_id, receipt_id, verdict, status, error, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (str(uuid.uuid4()), rule_id, session_id, receipt_id, verdict, status, error, _now()),
+        )
+        conn.commit()
 
 
 def get_stats() -> dict:

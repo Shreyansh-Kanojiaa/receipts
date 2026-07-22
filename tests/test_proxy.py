@@ -20,7 +20,10 @@ from mcp.client.session_group import ClientSessionGroup
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from receipts_mcp.proxy import namespacing_hook, call_and_record, normalize_result  # noqa: E402
+from receipts_mcp import proxy as proxy_module  # noqa: E402
+from receipts_mcp.proxy import (  # noqa: E402
+    namespacing_hook, call_and_record, normalize_result, record_receipt, log_receipt_summary,
+)
 from receipts_mcp.config import ProxySettings  # noqa: E402
 
 
@@ -97,5 +100,57 @@ def test_proxy_records_error_on_unknown_tool():
         # Failed call is surfaced as an error AND still receipted as status=error.
         assert result.isError is True
         assert captured["json"]["status"] == "error"
+
+    asyncio.run(run())
+
+
+def test_record_receipt_retries_once_on_connect_error():
+    async def run():
+        proxy_module._RECORD_RETRY_DELAY_SECONDS = 0
+        proxy_module._receipt_stats["attempted"] = 0
+        proxy_module._receipt_stats["recorded"] = 0
+
+        attempts = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise httpx.ConnectError("connection refused", request=request)
+            return httpx.Response(201, json={"id": "r1"})
+
+        transport = httpx.MockTransport(handler)
+        settings = ProxySettings(receipts_url="http://backend", receipts_api_key="proxy-key")
+
+        async with httpx.AsyncClient(transport=transport) as client:
+            await record_receipt(client, settings, "tool", {"a": 1}, {"b": 2}, "success")
+
+        assert len(attempts) == 2  # failed once, succeeded on retry
+        assert proxy_module._receipt_stats["attempted"] == 1
+        assert proxy_module._receipt_stats["recorded"] == 1
+
+    asyncio.run(run())
+
+
+def test_record_receipt_gives_up_after_retry_and_summary_warns(caplog):
+    async def run():
+        proxy_module._RECORD_RETRY_DELAY_SECONDS = 0
+        proxy_module._receipt_stats["attempted"] = 0
+        proxy_module._receipt_stats["recorded"] = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("connection refused", request=request)
+
+        transport = httpx.MockTransport(handler)
+        settings = ProxySettings(receipts_url="http://backend", receipts_api_key="proxy-key")
+
+        async with httpx.AsyncClient(transport=transport) as client:
+            await record_receipt(client, settings, "tool", {}, {}, "success")
+
+        assert proxy_module._receipt_stats["attempted"] == 1
+        assert proxy_module._receipt_stats["recorded"] == 0
+
+        with caplog.at_level("WARNING", logger="receipts.proxy"):
+            log_receipt_summary()
+        assert any("were not receipted" in r.message for r in caplog.records)
 
     asyncio.run(run())

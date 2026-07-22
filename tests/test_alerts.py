@@ -162,6 +162,81 @@ def test_fire_alerts_continues_after_one_rule_fails(isolated_database, monkeypat
     assert any("bad.test" in c for c in calls)
 
 
+def _sent_deliveries(rule_id):
+    with database.get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM alert_deliveries WHERE rule_id = ?", (rule_id,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def test_fire_alerts_retries_once_before_recording_failure(isolated_database, monkeypatch):
+    monkeypatch.setattr(alerts, "_RETRY_DELAY_SECONDS", 0)
+    rule = database.create_alert_rule(
+        name="flaky", trigger="TAMPERED", channel="webhook",
+        config=json.dumps({"url": "http://flaky.test/hook"}),
+    )
+
+    attempts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        if len(attempts) == 1:
+            return httpx.Response(500)
+        return httpx.Response(200)
+
+    monkeypatch.setattr(alerts.httpx, "AsyncClient", _fake_async_client(handler))
+    asyncio.run(alerts.fire_alerts("TAMPERED", "sess-retry", FAKE_RECEIPT))
+
+    assert len(attempts) == 2  # failed once, succeeded on retry
+    deliveries = _sent_deliveries(rule["id"])
+    assert len(deliveries) == 1
+    assert deliveries[0]["status"] == "sent"
+
+
+def test_fire_alerts_records_failure_after_exhausting_retry(isolated_database, monkeypatch):
+    monkeypatch.setattr(alerts, "_RETRY_DELAY_SECONDS", 0)
+    rule = database.create_alert_rule(
+        name="always-down", trigger="TAMPERED", channel="webhook",
+        config=json.dumps({"url": "http://down.test/hook"}),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    monkeypatch.setattr(alerts.httpx, "AsyncClient", _fake_async_client(handler))
+    asyncio.run(alerts.fire_alerts("TAMPERED", "sess-down", FAKE_RECEIPT))
+
+    deliveries = _sent_deliveries(rule["id"])
+    assert len(deliveries) == 1
+    assert deliveries[0]["status"] == "failed"
+    assert deliveries[0]["error"]
+
+
+def test_fire_alerts_dedups_repeated_event(isolated_database, monkeypatch):
+    """The same (rule, session, receipt, verdict) event can reach fire_alerts from
+    multiple verification paths (auto_verify, /verify, /verify-claim) — it must only
+    ever be delivered once."""
+    rule = database.create_alert_rule(
+        name="dedup", trigger="TAMPERED", channel="webhook",
+        config=json.dumps({"url": "http://dedup.test/hook"}),
+    )
+
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(200)
+
+    monkeypatch.setattr(alerts.httpx, "AsyncClient", _fake_async_client(handler))
+
+    asyncio.run(alerts.fire_alerts("TAMPERED", "sess-dedup", FAKE_RECEIPT))
+    asyncio.run(alerts.fire_alerts("TAMPERED", "sess-dedup", FAKE_RECEIPT))
+
+    assert len(calls) == 1  # second call is a no-op due to dedup
+    assert len(_sent_deliveries(rule["id"])) == 1
+
+
 # ── /alerts CRUD routes ────────────────────────────────────────────────────────
 
 def _proxy_headers(key="proxy-key"):

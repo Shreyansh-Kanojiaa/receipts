@@ -14,6 +14,8 @@ from models import (
     AlertRuleCreate,
     AlertRuleResponse,
     AlertRuleUpdate,
+    ApiKeyCreateRequest,
+    ApiKeyCreateResponse,
     ApiKeyResponse,
     ClaimedOutput,
     CloseSessionResponse,
@@ -25,6 +27,7 @@ from models import (
     ToolRecordRequest,
     VerifyRequest,
     VerifyResponse,
+    WhoamiResponse,
 )
 from database import (
     create_alert_rule,
@@ -53,7 +56,7 @@ from signer import build_receipt
 from verifier import run_verify, derive_verdict
 from auto_verify import auto_verify
 from alerts import fire_alerts, build_alert_payload
-from auth import require_viewer, require_proxy, require_admin, seed_api_keys
+from auth import require_viewer, require_proxy, require_admin, seed_api_keys, create_api_key
 from settings import get_settings
 from logging_config import configure_logging, get_logger
 
@@ -510,12 +513,22 @@ def list_keys(_auth: dict = Depends(require_admin)):
     return list_api_keys()
 
 
+@app.post("/api-keys", response_model=ApiKeyCreateResponse, status_code=201)
+def create_key(req: ApiKeyCreateRequest, _auth: dict = Depends(require_admin)):
+    return create_api_key(label=req.label, role=req.role)
+
+
 @app.post("/api-keys/{key_id}/revoke", response_model=RevokeApiKeyResponse)
 def revoke_key(key_id: str, _auth: dict = Depends(require_admin)):
     revoked = revoke_api_key(key_id)
     if not revoked:
         raise HTTPException(status_code=404, detail=f"API key not found or already revoked: {key_id}")
     return RevokeApiKeyResponse(id=key_id, revoked=True)
+
+
+@app.get("/whoami", response_model=WhoamiResponse)
+def whoami(_auth: dict = Depends(require_viewer)):
+    return WhoamiResponse(id=_auth["id"], label=_auth["label"], role=_auth["role"])
 
 
 # ── stats ─────────────────────────────────────────────────────────────────────

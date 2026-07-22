@@ -127,3 +127,18 @@ class ApiKeyResponse(BaseModel):
 class RevokeApiKeyResponse(BaseModel):
     id: str
     revoked: bool
+
+
+class ApiKeyCreateRequest(BaseModel):
+    label: str
+    role: Literal["viewer", "proxy", "admin"]
+
+
+class ApiKeyCreateResponse(ApiKeyResponse):
+    key: str
+
+
+class WhoamiResponse(BaseModel):
+    id: str
+    label: str
+    role: str

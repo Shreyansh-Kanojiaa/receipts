@@ -12,6 +12,7 @@ comma-separated) seeds the table on first startup when it is empty. Raw keys liv
 in the operator's env/secret store; the DB only ever holds hashes.
 """
 import hashlib
+import secrets
 import uuid
 from datetime import datetime, timezone
 
@@ -29,6 +30,16 @@ _ROLE_RANK = {"viewer": 1, "proxy": 2, "admin": 3}
 
 def hash_key(raw: str) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def create_api_key(label: str, role: str) -> dict:
+    """Mint a new API key. Returns the row plus the raw key — the only time it is
+    ever available; only its SHA-256 hash is persisted."""
+    raw = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc).isoformat()
+    key_id = str(uuid.uuid4())
+    insert_api_key(id=key_id, key_hash=hash_key(raw), label=label, role=role, created_at=now)
+    return {"id": key_id, "label": label, "role": role, "created_at": now, "revoked_at": None, "key": raw}
 
 
 def seed_api_keys() -> None:
